@@ -1,5 +1,4 @@
 -- spyTool/modules/01_core.lua
--- Concat-loaded by main.lua (order matters; locals are shared across the chunk).
 
 local HttpInterceptor
 

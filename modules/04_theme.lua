@@ -35,7 +35,7 @@ local Theme = {
     
     
     Radius = {
-        Window = 28, 
+        Window = 28,
         Large = 14,
         Medium = 10,
         Small = 8,

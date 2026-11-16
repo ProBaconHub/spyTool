@@ -306,7 +306,6 @@ function RemoteSpyUI:GetDisplaySize()
     return Vector2.new(1280, 720)
 end
 
--- Usable ScreenGui area (IgnoreGuiInset=false): viewport minus GuiService insets.
 function RemoteSpyUI:GetSafeDisplaySize()
     local display = self:GetDisplaySize()
     local insetTopLeft = Vector2.zero
@@ -339,7 +338,6 @@ function RemoteSpyUI:ClampWindowSize(width, height)
     return width, height
 end
 
--- Top-left so the window's visual center matches the display center.
 function RemoteSpyUI:GetCenteredWindowPosition(width, height)
     local display = self:GetSafeDisplaySize()
     local scale = self.UIScale or 1
@@ -760,9 +758,7 @@ function RemoteSpyUI:_beginStartupScan()
             self:_clearModuleListFrame()
             self:_showModuleScanPlaceholder("Scanning...")
         end
-        if self.RequireModuleCountLabel then
-            self.RequireModuleCountLabel.Text = "Scanning..."
-        end
+        self:_setModuleCountDisplay(nil)
 
         local scanDone = false
         ModuleExplorer:ScanAllModulesAsync(function(foundCount)
@@ -771,9 +767,7 @@ function RemoteSpyUI:_beginStartupScan()
             end
             local pct = 0.55 + math.min(0.35, (foundCount / 200) * 0.35)
             setProgress(pct, "Scanning modules...", string.format("%d modules found", foundCount))
-            if self.RequireModuleCountLabel then
-                self.RequireModuleCountLabel.Text = string.format("Scanning... %d found", foundCount)
-            end
+            self:_setModuleCountDisplay(foundCount)
             local placeholder = self.ModuleListFrame and self.ModuleListFrame:FindFirstChild("ModuleScanPlaceholder")
             if placeholder then
                 placeholder.Text = string.format("Scanning... %d modules found", foundCount)
@@ -795,9 +789,7 @@ function RemoteSpyUI:_beginStartupScan()
             if total == 0 and self.ModuleListFrame then
                 self:_showModuleScanPlaceholder("No modules found")
             end
-            if self.RequireModuleCountLabel then
-                self.RequireModuleCountLabel.Text = total .. " modules"
-            end
+            self:_setModuleCountDisplay(total)
             setProgress(1, "Ready", string.format("%d remotes · %d modules", remoteCount, total))
             task.wait(0.15)
             finishLoader()
@@ -900,21 +892,75 @@ function RemoteSpyUI:EnsureRefreshConnections()
     end
 end
 
+function RemoteSpyUI:GetTitleBarHeight()
+    return Theme.TitleBarHeight or 36
+end
+
+function RemoteSpyUI:GetMainFrameLayoutSize()
+    local main = self.MainFrame
+    if not main then
+        return 0, 0
+    end
+    local w, h = main.Size.X.Offset, main.Size.Y.Offset
+    if w > 0 and h > 0 then
+        return w, h
+    end
+    local scale = 1
+    if self.UIScaleInstance and typeof(self.UIScaleInstance.Scale) == "number" and self.UIScaleInstance.Scale > 0 then
+        scale = self.UIScaleInstance.Scale
+    elseif typeof(self.UIScale) == "number" and self.UIScale > 0 then
+        scale = self.UIScale
+    end
+    return main.AbsoluteSize.X / scale, main.AbsoluteSize.Y / scale
+end
+
 function RemoteSpyUI:CreateTitleBar()
-    local titleH = Theme.TitleBarHeight or 44
-    
-    local titleBar = createSquircle(Theme.Radius.Window, "Window-TL-TR", {
+    local windowR = Theme.Radius.Window or 28
+    local titleH = self:GetTitleBarHeight()
+    local _, mainH = self:GetMainFrameLayoutSize()
+
+    local titleBar = createInstance("TextButton", {
         Name = "TitleBar",
         Size = UDim2.new(1, 0, 0, titleH),
-        ImageColor3 = Theme.BackgroundSecondary,
+        BackgroundTransparency = 1,
+        Text = "",
+        AutoButtonColor = false,
+        ClipsDescendants = true,
         ZIndex = 10,
         Parent = self.MainFrame,
-    }, true)
-    
+    })
+
+    local titleFill = createSquircle(windowR, "Window", {
+        Name = "TitleBarFill",
+        Size = UDim2.new(1, 0, 0, math.max(1, mainH)),
+        Position = UDim2.new(0, 0, 0, 0),
+        ImageColor3 = Theme.BackgroundSecondary,
+        ZIndex = 10,
+        Parent = titleBar,
+    }, false)
+
+    local function syncTitleFillSize()
+        local _, h = self:GetMainFrameLayoutSize()
+        if titleFill and h > 0 then
+            titleFill.Size = UDim2.new(1, 0, 0, h)
+        end
+    end
+    self:_trackConnection(self.MainFrame:GetPropertyChangedSignal("Size"):Connect(syncTitleFillSize))
+    self:_trackConnection(self.MainFrame:GetPropertyChangedSignal("AbsoluteSize"):Connect(syncTitleFillSize))
+    task.defer(syncTitleFillSize)
+
+    local brandPadX = 10
+    local logoSize = 15
+    local logoTextGap = 5
+    local brandActionsGap = 8
+    local windowTitleText = "Spy Tool"
+    local windowTitleW = measureTextWidth(windowTitleText, 12, Theme.FontFamilyBold)
+    local brandW = logoSize + logoTextGap + windowTitleW
+
     local brand = createInstance("Frame", {
         Name = "Brand",
-        Size = UDim2.new(0, 130, 1, 0),
-        Position = UDim2.new(0, 10, 0, 0),
+        Size = UDim2.new(0, brandW, 1, 0),
+        Position = UDim2.new(0, brandPadX, 0, 0),
         BackgroundTransparency = 1,
         ZIndex = 11,
         Parent = titleBar
@@ -922,7 +968,7 @@ function RemoteSpyUI:CreateTitleBar()
 
     local logoImage = createInstance("ImageLabel", {
         Name = "Logo",
-        Size = UDim2.new(0, 15, 0, 15),
+        Size = UDim2.new(0, logoSize, 0, logoSize),
         Position = UDim2.new(0, 0, 0.5, 0),
         AnchorPoint = Vector2.new(0, 0.5),
         BackgroundTransparency = 1,
@@ -935,7 +981,7 @@ function RemoteSpyUI:CreateTitleBar()
     })
     local logoFallback = createInstance("TextLabel", {
         Name = "LogoFallback",
-        Size = UDim2.new(0, 15, 0, 15),
+        Size = UDim2.new(0, logoSize, 0, logoSize),
         Position = UDim2.new(0, 0, 0.5, 0),
         AnchorPoint = Vector2.new(0, 0.5),
         BackgroundTransparency = 1,
@@ -949,10 +995,11 @@ function RemoteSpyUI:CreateTitleBar()
     applyAssetIcon(logoImage, "logo.png", logoFallback)
 
     createInstance("TextLabel", {
-        Size = UDim2.new(1, -22, 1, 0),
-        Position = UDim2.new(0, 20, 0, 0),
+        Name = "TitleText",
+        Size = UDim2.new(0, windowTitleW, 1, 0),
+        Position = UDim2.new(0, logoSize + logoTextGap, 0, 0),
         BackgroundTransparency = 1,
-        Text = "Spy Tool",
+        Text = windowTitleText,
         TextColor3 = Theme.TextPrimary,
         TextSize = 12,
         Font = Theme.FontFamilyBold,
@@ -960,6 +1007,17 @@ function RemoteSpyUI:CreateTitleBar()
         ZIndex = 11,
         Parent = brand
     })
+
+    local titleActions = createInstance("Frame", {
+        Name = "TitleActions",
+        Size = UDim2.new(0, 140, 1, 0),
+        Position = UDim2.new(0, brandPadX + brandW + brandActionsGap, 0, 0),
+        BackgroundTransparency = 1,
+        Visible = true,
+        ZIndex = 11,
+        Parent = titleBar,
+    })
+    self.TitleActions = titleActions
     
     self.StatusLabel = createInstance("TextLabel", {
         Size = UDim2.new(0, 120, 1, 0),
@@ -974,15 +1032,16 @@ function RemoteSpyUI:CreateTitleBar()
     })
     
     local controls = createInstance("Frame", {
+        Name = "WindowControls",
         Size = UDim2.new(0, 56, 1, 0),
         Position = UDim2.new(1, -66, 0, 0),
         BackgroundTransparency = 1,
         ZIndex = 11,
         Parent = titleBar
     })
+    self.WindowControls = controls
     createListLayout(controls, 4, Enum.FillDirection.Horizontal, Enum.HorizontalAlignment.Right, Enum.VerticalAlignment.Center)
 
-    -- One control: minimize when open, maximize icon when collapsed (restore).
     self.MinimizeButton = UIComponents.IconButton(controls, "minimize.png", function()
         self:ToggleMinimize()
     end, 22, "Minimize")
@@ -1040,10 +1099,9 @@ end
 
 function RemoteSpyUI:CreateSidebar()
     local sideW = self.SidebarWidth or 44
-    local titleH = Theme.TitleBarHeight or 36
-    local windowR = Theme.Radius.Window or 16
-    
-    
+    local titleH = self:GetTitleBarHeight()
+    local windowR = Theme.Radius.Window or 28
+
     local sidebar = createInstance("Frame", {
         Name = "Sidebar",
         Size = UDim2.new(0, sideW, 1, -titleH),
@@ -1055,14 +1113,30 @@ function RemoteSpyUI:CreateSidebar()
         Parent = self.MainFrame
     })
 
-    createSquircle(windowR, "Window-BL-BR", {
+    local mainW, mainH = self:GetMainFrameLayoutSize()
+    local sidebarFill = createSquircle(windowR, "Window", {
         Name = "SidebarFill",
-        Size = UDim2.new(1, windowR + 2, 1, 0),
+        Size = UDim2.fromOffset(math.max(1, mainW), math.max(1, mainH)),
+        Position = UDim2.fromOffset(0, -titleH),
         ImageColor3 = Theme.BackgroundSecondary,
         ZIndex = 5,
         Parent = sidebar,
     }, false)
-    
+
+    local function syncSidebarFill()
+        if not sidebarFill then
+            return
+        end
+        local w, h = self:GetMainFrameLayoutSize()
+        if w > 0 and h > 0 then
+            sidebarFill.Size = UDim2.fromOffset(w, h)
+            sidebarFill.Position = UDim2.fromOffset(0, -self:GetTitleBarHeight())
+        end
+    end
+    self:_trackConnection(self.MainFrame:GetPropertyChangedSignal("Size"):Connect(syncSidebarFill))
+    self:_trackConnection(self.MainFrame:GetPropertyChangedSignal("AbsoluteSize"):Connect(syncSidebarFill))
+    task.defer(syncSidebarFill)
+
     local sidebarScroll = createInstance("ScrollingFrame", {
         Size = UDim2.new(1, 0, 1, 0),
         BackgroundTransparency = 1,
@@ -1193,7 +1267,7 @@ end
 
 function RemoteSpyUI:CreateMainContent()
     local sideW = self.SidebarWidth or 56
-    local titleH = Theme.TitleBarHeight or 44
+    local titleH = self:GetTitleBarHeight()
     local content = createInstance("Frame", {
         Name = "Content",
         Size = UDim2.new(1, -sideW, 1, -titleH),
@@ -1266,7 +1340,7 @@ function RemoteSpyUI:_typeFilterSummaryLabel()
     return "Types: " .. table.concat(enabled, ", ")
 end
 
-function RemoteSpyUI:_createTypeFilterDropdown(parent)
+function RemoteSpyUI:_createRemotesMoreMenu(parent)
     local typeDefs = {
         {Name = "RemoteEvent", Label = "RemoteEvent", Color = TypeColors.RemoteEvent, Asset = TypeAssets.RemoteEvent},
         {Name = "RemoteFunction", Label = "RemoteFunction", Color = TypeColors.RemoteFunction, Asset = TypeAssets.RemoteFunction},
@@ -1274,66 +1348,33 @@ function RemoteSpyUI:_createTypeFilterDropdown(parent)
         {Name = "BindableEvent", Label = "BindableEvent", Color = TypeColors.BindableEvent, Asset = TypeAssets.BindableEvent},
         {Name = "BindableFunction", Label = "BindableFunction", Color = TypeColors.BindableFunction, Asset = TypeAssets.BindableFunction},
     }
+    local sortOptions = {"Latest", "Calls"}
 
     local isOpen = false
-    local rowHeight = 28
-    local menuHeight = #typeDefs * rowHeight + 8
+    local sortMode = (RemoteScanner.SortMode == "calls") and "Calls" or "Latest"
+    local sectionLabelH = 18
+    local rowHeight = 26
+    local menuWidth = 196
+    local menuHeight = sectionLabelH + (#sortOptions * rowHeight) + 8 + sectionLabelH + (#typeDefs * rowHeight) + 12
+
     local container = createInstance("Frame", {
-        Name = "TypeFilterDropdown",
-        Size = UDim2.new(0, 110, 0, 24),
-        Position = UDim2.new(0, 86, 0.5, 0),
+        Name = "RemotesMoreMenu",
+        Size = UDim2.new(0, 26, 0, 26),
+        Position = UDim2.new(1, -32, 0.5, 0),
         AnchorPoint = Vector2.new(0, 0.5),
         BackgroundTransparency = 1,
         ZIndex = 40,
         Parent = parent,
     })
 
-    local button = createSquircle(Theme.Radius.Small, "Squircle", {
-        Size = UDim2.new(1, 0, 1, 0),
-        ImageColor3 = Theme.BackgroundSecondary,
-        ZIndex = 41,
-        Parent = container,
-    }, true)
-    createSquircle(Theme.Radius.Small, "SquircleOutline", {
-        Size = UDim2.new(1, 0, 1, 0),
-        ImageColor3 = Theme.Border,
-        ZIndex = 0,
-        Parent = button,
-    }, false)
-
-    local summary = createInstance("TextLabel", {
-        Name = "Summary",
-        Size = UDim2.new(1, -28, 1, 0),
-        Position = UDim2.new(0, 8, 0, 0),
-        BackgroundTransparency = 1,
-        Text = self:_typeFilterSummaryLabel(),
-        TextColor3 = Theme.TextPrimary,
-        TextSize = 10,
-        Font = Theme.FontFamily,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        TextTruncate = Enum.TextTruncate.AtEnd,
-        ZIndex = 42,
-        Parent = button,
-    })
-    local chevron = createAssetGlyph(button, "chevron.png", 10, {
-        Name = "Chevron",
-        Position = UDim2.new(1, -14, 0.5, 0),
-        ImageColor3 = Theme.TextMuted,
-        ZIndex = 42,
-    })
-
-    local menuContentWidth = 160
-    for _, filter in ipairs(typeDefs) do
-        menuContentWidth = math.max(
-            menuContentWidth,
-            measureTextWidth(filter.Label, 11, Theme.FontFamily) + 72
-        )
-    end
+    local button = UIComponents.IconButton(container, "more.png", nil, 26, "Options")
+    button.Position = UDim2.new(0, 0, 0, 0)
+    button.ZIndex = 41
 
     local optionsFrame = createSquircle(Theme.Radius.Small, "Squircle", {
         Name = "DropdownMenu",
-        Size = UDim2.new(0, menuContentWidth, 0, menuHeight),
-        Position = UDim2.new(0, 0, 1, 4),
+        Size = UDim2.new(0, menuWidth, 0, menuHeight),
+        Position = UDim2.new(1, -menuWidth, 1, 4),
         ImageColor3 = Theme.BackgroundSecondary,
         Visible = false,
         ZIndex = 200,
@@ -1352,7 +1393,7 @@ function RemoteSpyUI:_createTypeFilterDropdown(parent)
         ZIndex = 201,
         Parent = optionsFrame,
     })
-    createPadding(optionsContent, 4)
+    createPadding(optionsContent, 6)
     createListLayout(optionsContent, 2)
 
     local function bumpMenuZ(base)
@@ -1367,7 +1408,7 @@ function RemoteSpyUI:_createTypeFilterDropdown(parent)
 
     local function dockMenu()
         optionsFrame.Parent = container
-        optionsFrame.Position = UDim2.new(0, 0, 1, 4)
+        optionsFrame.Position = UDim2.new(1, -menuWidth, 1, 4)
         bumpMenuZ(200)
     end
 
@@ -1377,10 +1418,10 @@ function RemoteSpyUI:_createTypeFilterDropdown(parent)
             dockMenu()
             return
         end
-        local absPos = container.AbsolutePosition
-        local absSize = container.AbsoluteSize
+        local absPos = button.AbsolutePosition
+        local absSize = button.AbsoluteSize
         optionsFrame.Parent = screenGui
-        optionsFrame.Position = UDim2.new(0, absPos.X, 0, absPos.Y + absSize.Y + 4)
+        optionsFrame.Position = UDim2.new(0, absPos.X + absSize.X - menuWidth, 0, absPos.Y + absSize.Y + 4)
         bumpMenuZ(300)
     end
 
@@ -1392,37 +1433,91 @@ function RemoteSpyUI:_createTypeFilterDropdown(parent)
             dockMenu()
         end
         optionsFrame.Visible = isOpen
-        tween(chevron, {Rotation = isOpen and 180 or 0}, 0.2)
     end
 
-    local function layoutDropdownWidths()
-        local summaryText = summary.Text
-        local textW = measureTextWidth(summaryText, 10, Theme.FontFamily) + 36
-        local maxBtn = 220
-        if parent.AbsoluteSize.X > 0 then
-            
-            maxBtn = math.max(96, parent.AbsoluteSize.X - 86 - 64)
-        end
-        local btnW = math.clamp(textW, 96, maxBtn)
-        container.Size = UDim2.new(0, btnW, 0, 24)
-        local menuW = math.max(btnW, menuContentWidth)
-        optionsFrame.Size = UDim2.new(0, menuW, 0, menuHeight)
+    local function addSectionLabel(text, order)
+        createInstance("TextLabel", {
+            Size = UDim2.new(1, 0, 0, sectionLabelH),
+            BackgroundTransparency = 1,
+            Text = text,
+            TextColor3 = Theme.TextMuted,
+            TextSize = 10,
+            Font = Theme.FontFamilyBold,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            LayoutOrder = order,
+            ZIndex = 202,
+            Parent = optionsContent,
+        })
     end
 
-    local function refreshSummary()
-        summary.Text = self:_typeFilterSummaryLabel()
-        layoutDropdownWidths()
-    end
-
-    local rowChecks = {}
-
-    for i, filter in ipairs(typeDefs) do
+    local sortMarks = {}
+    addSectionLabel("Sort", 1)
+    for i, option in ipairs(sortOptions) do
         local row = createInstance("TextButton", {
-            Size = UDim2.new(1, 0, 0, 26),
+            Size = UDim2.new(1, 0, 0, rowHeight),
             BackgroundColor3 = Theme.BackgroundTertiary,
             BackgroundTransparency = 1,
             Text = "",
-            LayoutOrder = i,
+            LayoutOrder = 1 + i,
+            ZIndex = 202,
+            Parent = optionsContent,
+        })
+        createCorner(row, Theme.CornerRadiusSmall)
+        local label = createInstance("TextLabel", {
+            Size = UDim2.new(1, -28, 1, 0),
+            Position = UDim2.new(0, 8, 0, 0),
+            BackgroundTransparency = 1,
+            Text = option,
+            TextColor3 = Theme.TextPrimary,
+            TextSize = 11,
+            Font = Theme.FontFamily,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            ZIndex = 203,
+            Parent = row,
+        })
+        local mark = createInstance("TextLabel", {
+            Size = UDim2.new(0, 16, 1, 0),
+            Position = UDim2.new(1, -20, 0, 0),
+            BackgroundTransparency = 1,
+            Text = "",
+            TextColor3 = Theme.Primary,
+            TextSize = 12,
+            Font = Theme.FontFamilyBold,
+            ZIndex = 203,
+            Parent = row,
+        })
+        sortMarks[option] = mark
+        local function syncSort()
+            local selected = sortMode == option
+            mark.Text = selected and "✓" or ""
+            label.TextColor3 = selected and Theme.TextPrimary or Theme.TextSecondary
+        end
+        syncSort()
+        row.MouseEnter:Connect(function()
+            tween(row, {BackgroundTransparency = 0}, 0.1)
+        end)
+        row.MouseLeave:Connect(function()
+            tween(row, {BackgroundTransparency = 1}, 0.1)
+        end)
+        row.MouseButton1Click:Connect(function()
+            sortMode = option
+            RemoteScanner.SortMode = option:lower()
+            for name in pairs(sortMarks) do
+                local selected = sortMode == name
+                sortMarks[name].Text = selected and "✓" or ""
+            end
+            self:RefreshRemoteList()
+        end)
+    end
+
+    addSectionLabel("Types", 10)
+    for i, filter in ipairs(typeDefs) do
+        local row = createInstance("TextButton", {
+            Size = UDim2.new(1, 0, 0, rowHeight),
+            BackgroundColor3 = Theme.BackgroundTertiary,
+            BackgroundTransparency = 1,
+            Text = "",
+            LayoutOrder = 10 + i,
             ZIndex = 202,
             Parent = optionsContent,
         })
@@ -1475,9 +1570,7 @@ function RemoteSpyUI:_createTypeFilterDropdown(parent)
             ZIndex = 203,
             Parent = rowContent,
         })
-        
         local _, setCheck = UIComponents.Checkbox(checkHost, self.TypeFilters[filter.Name] == true, nil)
-        rowChecks[filter.Name] = setCheck
 
         local function syncRow()
             local enabled = self.TypeFilters[filter.Name] == true
@@ -1507,22 +1600,13 @@ function RemoteSpyUI:_createTypeFilterDropdown(parent)
                 self.TypeFilters[filter.Name] = true
             end
             syncRow()
-            refreshSummary()
             self:ApplyFilterChanges()
             self:SaveSettings()
         end)
     end
 
     button.MouseButton1Click:Connect(function()
-        layoutDropdownWidths()
         setOpen(not isOpen)
-    end)
-
-    parent:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
-        layoutDropdownWidths()
-        if isOpen then
-            floatMenu()
-        end
     end)
 
     local outsideClickConn = UserInputService.InputBegan:Connect(function(input)
@@ -1535,6 +1619,9 @@ function RemoteSpyUI:_createTypeFilterDropdown(parent)
         end
         local pos = input.Position
         local function inside(frame)
+            if not frame or not frame.Parent then
+                return false
+            end
             local absPos = frame.AbsolutePosition
             local absSize = frame.AbsoluteSize
             return pos.X >= absPos.X and pos.X <= absPos.X + absSize.X
@@ -1555,7 +1642,7 @@ function RemoteSpyUI:_createTypeFilterDropdown(parent)
     end)
 
     self.TypeFilterDropdown = container
-    refreshSummary()
+    self.RemotesMoreMenu = container
     return container
 end
 
@@ -1623,9 +1710,9 @@ function RemoteSpyUI:UpdateInspectorChrome()
 
     if crumb then
         if not remotePath or not group then
-            crumb.Text = "Remotes"
+            crumb.Text = "Inspector"
         elseif not argGroup then
-            crumb.Text = "Remotes  /  " .. (group.Info and group.Info.Name or remotePath)
+            crumb.Text = group.Info and group.Info.Name or remotePath
         else
             local preview = ""
             local cached = argGroup.CachedArgs
@@ -1643,7 +1730,7 @@ function RemoteSpyUI:UpdateInspectorChrome()
                 end
                 preview = "(" .. table.concat(parts, ", ") .. ")"
             end
-            crumb.Text = "Remotes  /  " .. (group.Info and group.Info.Name or remotePath) .. "  /  " .. preview
+            crumb.Text = (group.Info and group.Info.Name or remotePath) .. "  /  " .. preview
         end
     end
 
@@ -1727,92 +1814,55 @@ function RemoteSpyUI:CreateRemotesTab()
     createPadding(tab, 12)
     createListLayout(tab, 10)
 
-    
-    
-    
-    local chrome = createPanel(Theme.Radius.Medium, {
-        Size = UDim2.new(1, 0, 0, 36),
-        ImageColor3 = Theme.BackgroundSecondary,
-        LayoutOrder = 1,
-        Parent = tab,
-    }, true)
-    pcall(function()
-        chrome.ClipsDescendants = true
-    end)
+    local titleActions = self.TitleActions
+    if titleActions then
+        local remotesActions = createInstance("Frame", {
+            Name = "RemotesTitleActions",
+            Size = UDim2.new(1, 0, 1, 0),
+            BackgroundTransparency = 1,
+            Visible = true,
+            ZIndex = 12,
+            Parent = titleActions,
+        })
+        createListLayout(remotesActions, 6, Enum.FillDirection.Horizontal, Enum.HorizontalAlignment.Left, Enum.VerticalAlignment.Center)
+        self.RemotesTitleActions = remotesActions
 
-    local chromePad = createInstance("Frame", {
-        Size = UDim2.new(1, -16, 1, -8),
-        Position = UDim2.new(0, 8, 0, 4),
-        BackgroundTransparency = 1,
-        ZIndex = 2,
-        Parent = chrome,
-    })
+        local rescanBtn = UIComponents.IconButton(remotesActions, "rescan.png", function()
+            RemoteScanner:Scan()
+            self:RefreshRemoteList(true)
+            UIComponents.Notification(self.ScreenGui, "Rescanned all remotes", "success")
+        end, 22, "Rescan")
+        rescanBtn.LayoutOrder = 1
+        rescanBtn.ZIndex = 12
 
-    local searchWrap = createInstance("Frame", {
-        Size = UDim2.new(1, -214, 1, 0),
-        BackgroundTransparency = 1,
-        Parent = chromePad,
-    })
-    UIComponents.SearchBar(searchWrap, "Search remotes...", function(text)
-        self.SearchFilter = text:lower()
-        self:RefreshRemoteList()
-    end)
+        local clearBtn = UIComponents.IconButton(remotesActions, "clear.png", function()
+            RemoteScanner:ClearLogs()
+            self:RefreshRemoteList(true)
+            self:ShowInspectorEmptyState(true)
+            UIComponents.Notification(self.ScreenGui, "Remote logs cleared", "info")
+        end, 22, "Clear")
+        clearBtn.LayoutOrder = 2
+        clearBtn.ZIndex = 12
 
-    local sortWrap = createInstance("Frame", {
-        Size = UDim2.new(0, 100, 1, 0),
-        Position = UDim2.new(1, -206, 0, 0),
-        BackgroundTransparency = 1,
-        Parent = chromePad,
-    })
-    local sortDropdown = UIComponents.Dropdown(sortWrap, {"Latest", "Calls"}, "Latest", function(option)
-        RemoteScanner.SortMode = option:lower()
-        self:RefreshRemoteList()
-    end)
-    sortDropdown.Size = UDim2.new(1, 0, 1, 0)
-
-    local actions = createInstance("Frame", {
-        Size = UDim2.new(0, 96, 1, 0),
-        Position = UDim2.new(1, -96, 0, 0),
-        BackgroundTransparency = 1,
-        Parent = chromePad,
-    })
-    createListLayout(actions, 6, Enum.FillDirection.Horizontal, Enum.HorizontalAlignment.Right, Enum.VerticalAlignment.Center)
-
-    local rescanBtn = UIComponents.IconButton(actions, "rescan.png", function()
-        RemoteScanner:Scan()
-        self:RefreshRemoteList(true)
-        UIComponents.Notification(self.ScreenGui, "Rescanned all remotes", "success")
-    end, 26, "Rescan")
-    rescanBtn.LayoutOrder = 1
-
-    local clearBtn = UIComponents.IconButton(actions, "clear.png", function()
-        RemoteScanner:ClearLogs()
-        self:RefreshRemoteList(true)
-        self:ShowInspectorEmptyState(true)
-        UIComponents.Notification(self.ScreenGui, "Remote logs cleared", "info")
-    end, 26, "Clear")
-    clearBtn.LayoutOrder = 2
-
-    self.RemoteSpyButton = UIComponents.IconButton(actions, "play.png", function()
-        if RemoteScanner.IsSpying then
-            RemoteScanner:StopSpying()
-        else
-            pcall(function()
-                RemoteScanner:StartSpying()
-            end)
-        end
+        self.RemoteSpyButton = UIComponents.IconButton(remotesActions, "play.png", function()
+            if RemoteScanner.IsSpying then
+                RemoteScanner:StopSpying()
+            else
+                pcall(function()
+                    RemoteScanner:StartSpying()
+                end)
+            end
+            self:_syncRemoteSpyButton()
+        end, 22, "Start Spy")
+        self.RemoteSpyButton.LayoutOrder = 3
+        self.RemoteSpyButton.ZIndex = 12
         self:_syncRemoteSpyButton()
-    end, 26, "Start Spy")
-    self.RemoteSpyButton.LayoutOrder = 3
-    self:_syncRemoteSpyButton()
+    end
 
-    
-    
-    
     local body = createInstance("Frame", {
-        Size = UDim2.new(1, 0, 1, -46),
+        Size = UDim2.new(1, 0, 1, 0),
         BackgroundTransparency = 1,
-        LayoutOrder = 2,
+        LayoutOrder = 1,
         Parent = tab,
     })
 
@@ -1828,9 +1878,16 @@ function RemoteSpyUI:CreateRemotesTab()
         leftPanel.ClipsDescendants = true
     end)
 
-    
+    local headerH = 30
+    local searchH = 24
+    local moreSize = 26
+    local headerPadX = 8
+    local remotesTitleText = "Remotes"
+    local titleW = measureTextWidth(remotesTitleText, 12, Theme.FontFamilyBold)
+    local rightReserve = moreSize + headerPadX + 6
+
     local listHeader = createSquircle(Theme.Radius.Medium, "Squircle-TL-TR", {
-        Size = UDim2.new(1, 0, 0, 36),
+        Size = UDim2.new(1, 0, 0, headerH),
         ImageColor3 = Theme.BackgroundTertiary,
         ZIndex = 2,
         ClipsDescendants = true,
@@ -1838,38 +1895,55 @@ function RemoteSpyUI:CreateRemotesTab()
     }, false)
 
     createInstance("TextLabel", {
-        Size = UDim2.new(0, 70, 0, 18),
-        Position = UDim2.new(0, 12, 0.5, 0),
+        Name = "RemotesTitle",
+        Size = UDim2.new(0, titleW, 0, 18),
+        Position = UDim2.new(0, headerPadX, 0.5, 0),
         AnchorPoint = Vector2.new(0, 0.5),
         BackgroundTransparency = 1,
-        Text = "Remotes",
+        Text = remotesTitleText,
         TextColor3 = Theme.TextPrimary,
         TextSize = 12,
         Font = Theme.FontFamilyBold,
         TextXAlignment = Enum.TextXAlignment.Left,
-        ZIndex = 3,
-        Parent = listHeader,
-    })
-    createInstance("TextLabel", {
-        Size = UDim2.new(0, 48, 0, 18),
-        Position = UDim2.new(1, -56, 0.5, 0),
-        AnchorPoint = Vector2.new(0, 0.5),
-        BackgroundTransparency = 1,
-        Text = "Calls",
-        TextColor3 = Theme.TextMuted,
-        TextSize = 11,
-        Font = Theme.FontFamily,
-        TextXAlignment = Enum.TextXAlignment.Right,
+        TextTruncate = Enum.TextTruncate.AtEnd,
         ZIndex = 3,
         Parent = listHeader,
     })
 
     self._filterChips = {Type = {}, Direction = {}}
-    self:_createTypeFilterDropdown(listHeader)
+    self:_createRemotesMoreMenu(listHeader)
+
+    local searchCollapsedPos = UDim2.new(1, -(rightReserve + searchH), 0.5, 0)
+    local searchExpandedPos = UDim2.new(0, headerPadX, 0.5, 0)
+    local searchExpandedSize = UDim2.new(1, -(headerPadX + rightReserve), 0, searchH)
+    local searchWrap = createInstance("Frame", {
+        Name = "RemoteSearchWrap",
+        Size = UDim2.new(0, searchH, 0, searchH),
+        Position = searchCollapsedPos,
+        AnchorPoint = Vector2.new(0, 0.5),
+        BackgroundTransparency = 1,
+        ZIndex = 4,
+        Parent = listHeader,
+    })
+    UIComponents.SearchBar(searchWrap, "Search...", function(text)
+        self.SearchFilter = text:lower()
+        self:RefreshRemoteList()
+    end, {
+        Pill = true,
+        Icon = true,
+        IconFile = "search.png",
+        Radius = 999,
+        ImageColor3 = Theme.BackgroundSecondary,
+        Expandable = true,
+        CollapsedSize = UDim2.new(0, searchH, 0, searchH),
+        CollapsedPosition = searchCollapsedPos,
+        ExpandedSize = searchExpandedSize,
+        ExpandedPosition = searchExpandedPos,
+    })
 
     local remoteScroll = UIComponents.ScrollFrame(leftPanel)
-    remoteScroll.Size = UDim2.new(1, 0, 1, -36)
-    remoteScroll.Position = UDim2.new(0, 0, 0, 36)
+    remoteScroll.Size = UDim2.new(1, 0, 1, -headerH)
+    remoteScroll.Position = UDim2.new(0, 0, 0, headerH)
     createPadding(remoteScroll, 6)
     createListLayout(remoteScroll, 3)
     self.RemoteListFrame = remoteScroll
@@ -2182,72 +2256,13 @@ function RemoteSpyUI:CreateRequireTab()
     createPadding(tab, 12)
     createListLayout(tab, 10)
 
-    
-    
-    
-    local chrome = createPanel(Theme.Radius.Medium, {
-        Size = UDim2.new(1, 0, 0, 36),
-        ImageColor3 = Theme.BackgroundSecondary,
-        LayoutOrder = 1,
-        Parent = tab,
-    }, true)
-    pcall(function()
-        chrome.ClipsDescendants = true
-    end)
-
-    local chromePad = createInstance("Frame", {
-        Size = UDim2.new(1, -16, 1, -8),
-        Position = UDim2.new(0, 8, 0, 4),
-        BackgroundTransparency = 1,
-        ZIndex = 2,
-        Parent = chrome,
-    })
-
-    local searchWrap = createInstance("Frame", {
-        Size = UDim2.new(1, -110, 1, 0),
-        BackgroundTransparency = 1,
-        Parent = chromePad,
-    })
-    local searchContainer, searchInput = UIComponents.SearchBar(searchWrap, "Search modules...")
-    searchContainer.Size = UDim2.new(1, 0, 1, 0)
-
-    self._moduleSearchDebounceId = 0
-    searchInput:GetPropertyChangedSignal("Text"):Connect(function()
-        self._moduleSearchDebounceId = (self._moduleSearchDebounceId or 0) + 1
-        local debounceId = self._moduleSearchDebounceId
-        task.delay(0.25, function()
-            if self._moduleSearchDebounceId ~= debounceId then
-                return
-            end
-            ModuleExplorer.SearchFilter = searchInput.Text
-            self:RefreshModuleList(true)
-        end)
-    end)
-
-    local actions = createInstance("Frame", {
-        Size = UDim2.new(0, 100, 1, 0),
-        Position = UDim2.new(1, -100, 0, 0),
-        BackgroundTransparency = 1,
-        Parent = chromePad,
-    })
-    createListLayout(actions, 6, Enum.FillDirection.Horizontal, Enum.HorizontalAlignment.Right, Enum.VerticalAlignment.Center)
-
-    self.RequireModuleCountLabel = createInstance("TextLabel", {
-        Size = UDim2.new(0, 64, 1, 0),
-        BackgroundTransparency = 1,
-        Text = "0 modules",
-        TextColor3 = Theme.TextMuted,
-        TextSize = 10,
-        Font = Theme.FontFamily,
-        TextXAlignment = Enum.TextXAlignment.Right,
-        LayoutOrder = 1,
-        Parent = actions,
-    })
+    self.ModulesScanned = false
+    self.ModuleTreeView = false
 
     local function runModuleScan()
         if ModuleExplorer._scanRunning then
             ModuleExplorer:CancelScan()
-            self.RequireModuleCountLabel.Text = "Scan cancelled"
+            self:_setModuleCountDisplay(0)
             return
         end
 
@@ -2255,11 +2270,11 @@ function RemoteSpyUI:CreateRequireTab()
         self._moduleScanDisplayOrder = 0
         self:_clearModuleListFrame()
         self:_showModuleScanPlaceholder("Scanning...")
-        self.RequireModuleCountLabel.Text = "Scanning..."
+        self:_setModuleCountDisplay(nil)
 
         ModuleExplorer:ScanAllModulesAsync(function(foundCount, processed)
-            self.RequireModuleCountLabel.Text = string.format("Scanning... %d found", foundCount)
-            local placeholder = self.ModuleListFrame:FindFirstChild("ModuleScanPlaceholder")
+            self:_setModuleCountDisplay(foundCount)
+            local placeholder = self.ModuleListFrame and self.ModuleListFrame:FindFirstChild("ModuleScanPlaceholder")
             if placeholder then
                 placeholder.Text = string.format("Scanning... %d modules found", foundCount)
             end
@@ -2276,7 +2291,7 @@ function RemoteSpyUI:CreateRequireTab()
             if total == 0 then
                 self:_showModuleScanPlaceholder("No modules found")
             end
-            self.RequireModuleCountLabel.Text = total .. " modules"
+            self:_setModuleCountDisplay(total)
             UIComponents.Notification(self.ScreenGui, "Found " .. total .. " modules", "success")
         end, function(batch)
             if self.ModuleTreeView then
@@ -2287,22 +2302,55 @@ function RemoteSpyUI:CreateRequireTab()
         end)
         self._moduleScanUIGen = ModuleExplorer._scanId
     end
+    self._runModuleScan = runModuleScan
 
-    UIComponents.IconButton(actions, "rescan.png", runModuleScan, 26, "Rescan").LayoutOrder = 2
+    local titleActions = self.TitleActions
+    if titleActions then
+        local modulesActions = createInstance("Frame", {
+            Name = "ModulesTitleActions",
+            Size = UDim2.new(1, 0, 1, 0),
+            BackgroundTransparency = 1,
+            Visible = false,
+            ZIndex = 12,
+            Parent = titleActions,
+        })
+        createListLayout(modulesActions, 6, Enum.FillDirection.Horizontal, Enum.HorizontalAlignment.Left, Enum.VerticalAlignment.Center)
+        self.ModulesTitleActions = modulesActions
 
-    
-    
-    
+        local treeWrap = createInstance("Frame", {
+            Name = "ModulesTreeToggle",
+            Size = UDim2.new(0, 72, 1, 0),
+            BackgroundTransparency = 1,
+            LayoutOrder = 1,
+            ZIndex = 12,
+            Parent = modulesActions,
+        })
+        createListLayout(treeWrap, 0, Enum.FillDirection.Horizontal, Enum.HorizontalAlignment.Left, Enum.VerticalAlignment.Center)
+        UIComponents.Checkbox(treeWrap, self.ModuleTreeView, function(state)
+            self.ModuleTreeView = state
+            self:_switchModuleListView()
+        end, "Tree")
+
+        local rescanBtn = UIComponents.IconButton(modulesActions, "rescan.png", runModuleScan, 22, "Rescan")
+        rescanBtn.LayoutOrder = 2
+        rescanBtn.ZIndex = 12
+    end
+
     local mainContent = createInstance("Frame", {
-        Size = UDim2.new(1, 0, 1, -46),
+        Size = UDim2.new(1, 0, 1, 0),
         BackgroundTransparency = 1,
-        LayoutOrder = 2,
-        Parent = tab
+        LayoutOrder = 1,
+        Parent = tab,
     })
 
-    local headerH = 32
+    local headerH = 30
+    local searchH = 24
+    local countSize = 26
+    local headerPadX = 8
+    local modulesTitleText = "Modules"
+    local titleW = measureTextWidth(modulesTitleText, 12, Theme.FontFamilyBold)
+    local rightReserve = countSize + headerPadX + 6
 
-    
     local modulePanel = createPanel(Theme.Radius.Medium, {
         Size = UDim2.new(0.30, -5, 1, 0),
         Position = UDim2.new(0, 0, 0, 0),
@@ -2313,30 +2361,83 @@ function RemoteSpyUI:CreateRequireTab()
         modulePanel.ClipsDescendants = true
     end)
 
+    local moduleHeader = createSquircle(Theme.Radius.Medium, "Squircle-TL-TR", {
+        Size = UDim2.new(1, 0, 0, headerH),
+        ImageColor3 = Theme.BackgroundTertiary,
+        ZIndex = 2,
+        ClipsDescendants = true,
+        Parent = modulePanel,
+    }, false)
+
     local moduleTitle = createInstance("TextLabel", {
-        Size = UDim2.new(1, -88, 0, headerH),
-        Position = UDim2.new(0, 8, 0, 0),
+        Name = "ModulesTitle",
+        Size = UDim2.new(0, titleW, 0, 18),
+        Position = UDim2.new(0, headerPadX, 0.5, 0),
+        AnchorPoint = Vector2.new(0, 0.5),
         BackgroundTransparency = 1,
-        Text = "Modules",
+        Text = modulesTitleText,
         TextColor3 = Theme.TextPrimary,
-        TextSize = 11,
+        TextSize = 12,
         Font = Theme.FontFamilyBold,
         TextXAlignment = Enum.TextXAlignment.Left,
-        ZIndex = 2,
-        Parent = modulePanel
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        ZIndex = 3,
+        Parent = moduleHeader,
     })
 
-    local treeWrap = createInstance("Frame", {
-        Size = UDim2.new(0, 72, 0, 18),
-        Position = UDim2.new(1, -80, 0, math.floor((headerH - 16) / 2)),
+    self.RequireModuleCountLabel = createInstance("TextLabel", {
+        Name = "ModuleCount",
+        Size = UDim2.new(0, countSize, 0, countSize),
+        Position = UDim2.new(1, -32, 0.5, 0),
+        AnchorPoint = Vector2.new(0, 0.5),
         BackgroundTransparency = 1,
+        Text = "0",
+        TextColor3 = Theme.TextMuted,
+        TextSize = 11,
+        Font = Theme.FontFamilyBold,
+        TextXAlignment = Enum.TextXAlignment.Center,
+        TextYAlignment = Enum.TextYAlignment.Center,
         ZIndex = 3,
-        Parent = modulePanel,
+        Parent = moduleHeader,
     })
-    UIComponents.Checkbox(treeWrap, self.ModuleTreeView, function(state)
-        self.ModuleTreeView = state
-        self:_switchModuleListView()
-    end, "Tree")
+
+    local searchCollapsedPos = UDim2.new(1, -(rightReserve + searchH), 0.5, 0)
+    local searchExpandedPos = UDim2.new(0, headerPadX, 0.5, 0)
+    local searchExpandedSize = UDim2.new(1, -(headerPadX + rightReserve), 0, searchH)
+    local searchWrap = createInstance("Frame", {
+        Name = "ModuleSearchWrap",
+        Size = UDim2.new(0, searchH, 0, searchH),
+        Position = searchCollapsedPos,
+        AnchorPoint = Vector2.new(0, 0.5),
+        BackgroundTransparency = 1,
+        ZIndex = 4,
+        Parent = moduleHeader,
+    })
+    local _, searchInput = UIComponents.SearchBar(searchWrap, "Search...", nil, {
+        Pill = true,
+        Icon = true,
+        IconFile = "search.png",
+        Radius = 999,
+        ImageColor3 = Theme.BackgroundSecondary,
+        Expandable = true,
+        CollapsedSize = UDim2.new(0, searchH, 0, searchH),
+        CollapsedPosition = searchCollapsedPos,
+        ExpandedSize = searchExpandedSize,
+        ExpandedPosition = searchExpandedPos,
+    })
+
+    self._moduleSearchDebounceId = 0
+    searchInput:GetPropertyChangedSignal("Text"):Connect(function()
+        self._moduleSearchDebounceId = (self._moduleSearchDebounceId or 0) + 1
+        local debounceId = self._moduleSearchDebounceId
+        task.delay(0.2, function()
+            if self._moduleSearchDebounceId ~= debounceId then
+                return
+            end
+            ModuleExplorer.SearchFilter = searchInput.Text
+            self:RefreshModuleList(true)
+        end)
+    end)
 
     local moduleScroll = createInstance("ScrollingFrame", {
         Size = UDim2.new(1, 0, 1, -headerH),
@@ -2348,7 +2449,7 @@ function RemoteSpyUI:CreateRequireTab()
         AutomaticCanvasSize = Enum.AutomaticSize.Y,
         BorderSizePixel = 0,
         ZIndex = 2,
-        Parent = modulePanel
+        Parent = modulePanel,
     })
     createPadding(moduleScroll, 4)
     createListLayout(moduleScroll, 2)
@@ -2356,7 +2457,6 @@ function RemoteSpyUI:CreateRequireTab()
     self.ModuleListFrame = moduleScroll
     self.ModuleTitle = moduleTitle
 
-    
     local contentsPanel = createPanel(Theme.Radius.Medium, {
         Size = UDim2.new(0.30, -10, 1, 0),
         Position = UDim2.new(0.30, 5, 0, 0),
@@ -2367,17 +2467,28 @@ function RemoteSpyUI:CreateRequireTab()
         contentsPanel.ClipsDescendants = true
     end)
 
+    local contentsHeader = createSquircle(Theme.Radius.Medium, "Squircle-TL-TR", {
+        Size = UDim2.new(1, 0, 0, headerH),
+        ImageColor3 = Theme.BackgroundTertiary,
+        ZIndex = 2,
+        ClipsDescendants = true,
+        Parent = contentsPanel,
+    }, false)
+
     local contentsTitle = createInstance("TextLabel", {
-        Size = UDim2.new(1, -8, 0, headerH),
-        Position = UDim2.new(0, 8, 0, 0),
+        Name = "ContentsTitle",
+        Size = UDim2.new(1, -(headerPadX * 2), 0, 18),
+        Position = UDim2.new(0, headerPadX, 0.5, 0),
+        AnchorPoint = Vector2.new(0, 0.5),
         BackgroundTransparency = 1,
         Text = "Contents",
         TextColor3 = Theme.TextPrimary,
-        TextSize = 11,
+        TextSize = 12,
         Font = Theme.FontFamilyBold,
         TextXAlignment = Enum.TextXAlignment.Left,
-        ZIndex = 2,
-        Parent = contentsPanel
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        ZIndex = 3,
+        Parent = contentsHeader,
     })
 
     local contentsScroll = createInstance("ScrollingFrame", {
@@ -2390,7 +2501,7 @@ function RemoteSpyUI:CreateRequireTab()
         AutomaticCanvasSize = Enum.AutomaticSize.Y,
         BorderSizePixel = 0,
         ZIndex = 2,
-        Parent = contentsPanel
+        Parent = contentsPanel,
     })
     createPadding(contentsScroll, 4)
     createListLayout(contentsScroll, 2)
@@ -2398,7 +2509,6 @@ function RemoteSpyUI:CreateRequireTab()
     self.ContentsListFrame = contentsScroll
     self.ContentsTitle = contentsTitle
 
-    
     local detailsPanel = createPanel(Theme.Radius.Medium, {
         Size = UDim2.new(0.40, -5, 1, 0),
         Position = UDim2.new(0.60, 5, 0, 0),
@@ -2409,17 +2519,28 @@ function RemoteSpyUI:CreateRequireTab()
         detailsPanel.ClipsDescendants = true
     end)
 
+    local detailsHeader = createSquircle(Theme.Radius.Medium, "Squircle-TL-TR", {
+        Size = UDim2.new(1, 0, 0, headerH),
+        ImageColor3 = Theme.BackgroundTertiary,
+        ZIndex = 2,
+        ClipsDescendants = true,
+        Parent = detailsPanel,
+    }, false)
+
     local detailsTitle = createInstance("TextLabel", {
-        Size = UDim2.new(1, -8, 0, headerH),
-        Position = UDim2.new(0, 8, 0, 0),
+        Name = "DetailsTitle",
+        Size = UDim2.new(1, -(headerPadX * 2), 0, 18),
+        Position = UDim2.new(0, headerPadX, 0.5, 0),
+        AnchorPoint = Vector2.new(0, 0.5),
         BackgroundTransparency = 1,
         Text = "Details",
         TextColor3 = Theme.TextPrimary,
-        TextSize = 11,
+        TextSize = 12,
         Font = Theme.FontFamilyBold,
         TextXAlignment = Enum.TextXAlignment.Left,
-        ZIndex = 2,
-        Parent = detailsPanel
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        ZIndex = 3,
+        Parent = detailsHeader,
     })
 
     local detailsScroll = createInstance("ScrollingFrame", {
@@ -2431,15 +2552,14 @@ function RemoteSpyUI:CreateRequireTab()
         CanvasSize = UDim2.new(0, 0, 0, 0),
         AutomaticCanvasSize = Enum.AutomaticSize.Y,
         BorderSizePixel = 0,
-        Parent = detailsPanel
+        Parent = detailsPanel,
     })
     createPadding(detailsScroll, 4)
     createListLayout(detailsScroll, 4)
 
     self.ModuleDetailsFrame = detailsScroll
     self.ModuleDetailsTitle = detailsTitle
-    
-    
+
     self.ModulePanel = modulePanel
     self.ContentsPanel = contentsPanel
     self.RequireDetailsPanel = detailsPanel
@@ -2585,11 +2705,18 @@ function RemoteSpyUI:_isModuleTreeRowVisible(row, expandedNodes)
     return areTreeAncestorsExpanded(self:_getModuleTreeRowPath(row), expandedNodes, self._moduleTreeParentByKey)
 end
 
+function RemoteSpyUI:_findTreeChild(parent, name)
+    if not parent then
+        return nil
+    end
+    return parent:FindFirstChild(name, true)
+end
+
 function RemoteSpyUI:_setTreeHeaderExpanded(entry, isExpanded)
     if not entry then
         return
     end
-    setModuleTreeArrowExpanded(entry:FindFirstChild("TreeArrow"), isExpanded)
+    setModuleTreeArrowExpanded(self:_findTreeChild(entry, "TreeArrow"), isExpanded)
 end
 
 function RemoteSpyUI:_createModuleTreeRowEntry(row, order)
@@ -2668,9 +2795,7 @@ function RemoteSpyUI:_syncFlatModuleList(modules)
         end
     end
     
-    if self.RequireModuleCountLabel then
-        self.RequireModuleCountLabel.Text = #modules .. " modules"
-    end
+    self:_setModuleCountDisplay(#modules)
 end
 
 function RemoteSpyUI:_clearModuleTreeRowsOnly()
@@ -2717,9 +2842,7 @@ function RemoteSpyUI:_switchModuleListView()
                     self:_applyModuleEntryVisual(entry, moduleData.Path)
                 end
             end
-            if self.RequireModuleCountLabel then
-                self.RequireModuleCountLabel.Text = #modules .. " modules"
-            end
+            self:_setModuleCountDisplay(#modules)
         end
         self:_setModuleTreeRowsVisible(false)
     end
@@ -2987,7 +3110,7 @@ function RemoteSpyUI:_getModuleTreeLayout(depth)
 end
 
 function RemoteSpyUI:_syncTreeArrowHitZone(header, indent)
-    local arrowHit = header and header:FindFirstChild("TreeArrowHit")
+    local arrowHit = self:_findTreeChild(header, "TreeArrowHit")
     if arrowHit then
         arrowHit.Position = UDim2.new(0, indent, 0, 0)
     end
@@ -2999,8 +3122,8 @@ function RemoteSpyUI:_applyModuleTreeRowLayout(entry, depth, opts)
     end
     opts = opts or {}
     local layout = self:_getModuleTreeLayout(depth)
-    
-    local arrow = entry:FindFirstChild("TreeArrow")
+
+    local arrow = self:_findTreeChild(entry, "TreeArrow")
     if arrow and arrow:IsA("GuiObject") then
         arrow.Position = UDim2.new(0, layout.arrow + MODULE_TREE_ARROW_WIDTH * 0.5, 0.5, 0)
         if opts.arrowExpanded ~= nil then
@@ -3010,8 +3133,8 @@ function RemoteSpyUI:_applyModuleTreeRowLayout(entry, depth, opts)
         end
     end
     self:_syncTreeArrowHitZone(entry, layout.indent)
-    
-    local badge = entry:FindFirstChild("ModuleTreeBadge") or entry:FindFirstChild("ModuleTreeIcon")
+
+    local badge = self:_findTreeChild(entry, "ModuleTreeBadge") or self:_findTreeChild(entry, "ModuleTreeIcon")
     if badge then
         local yOff = badge.AnchorPoint.Y >= 0.5 and 0 or (badge.Position.Y.Offset)
         if badge.AnchorPoint.Y >= 0.5 then
@@ -3021,12 +3144,12 @@ function RemoteSpyUI:_applyModuleTreeRowLayout(entry, depth, opts)
         end
     end
 
-    local folderIcon = entry:FindFirstChild("TreeFolderIcon")
+    local folderIcon = self:_findTreeChild(entry, "TreeFolderIcon")
     if folderIcon then
         folderIcon.Position = UDim2.new(0, layout.badge, 0.5, 0)
     end
-    
-    local nameLabel = entry:FindFirstChild("TreeNodeName")
+
+    local nameLabel = self:_findTreeChild(entry, "TreeNodeName")
     if nameLabel then
         nameLabel.Position = UDim2.new(0, layout.name, 0, 0)
         nameLabel.Size = UDim2.new(1, -layout.namePad, 1, 0)
@@ -3037,10 +3160,10 @@ function RemoteSpyUI:_bindModuleTreeRowClicks(header, opts)
     opts = opts or {}
     local lastClickAt = 0
     local doubleClickWindow = 0.35
-    
+
     if opts.onToggle then
-        local arrow = header:FindFirstChild("TreeArrow")
-        local existingHit = header:FindFirstChild("TreeArrowHit")
+        local arrow = self:_findTreeChild(header, "TreeArrow")
+        local existingHit = self:_findTreeChild(header, "TreeArrowHit")
         if existingHit then
             existingHit:Destroy()
         end
@@ -3214,8 +3337,8 @@ function RemoteSpyUI:_applyModuleTreeRowsIncremental(purgeStale)
         end
     end
     
-    self.RequireModuleCountLabel.Text = #modules .. " modules"
-    
+    self:_setModuleCountDisplay(#modules)
+
     if scrollAnchor then
         self:_restoreModuleListScrollAnchor(scrollAnchor)
         task.defer(function()
@@ -3282,8 +3405,8 @@ function RemoteSpyUI:_appendModulesDuringScan(batch)
         end
     end
     
-    if added > 0 and self.RequireModuleCountLabel then
-        self.RequireModuleCountLabel.Text = #ModuleExplorer.AllModules .. " modules"
+    if added > 0 then
+        self:_setModuleCountDisplay(#ModuleExplorer.AllModules)
     end
 end
 
@@ -3295,9 +3418,7 @@ function RemoteSpyUI:_resortModuleListAfterScan()
             entry.LayoutOrder = i
         end
     end
-    if self.RequireModuleCountLabel then
-        self.RequireModuleCountLabel.Text = #modules .. " modules"
-    end
+    self:_setModuleCountDisplay(#modules)
 end
 
 function RemoteSpyUI:RefreshModuleList(forceFull)
@@ -3305,29 +3426,20 @@ function RemoteSpyUI:RefreshModuleList(forceFull)
         self:RefreshModuleTreeList(forceFull)
         return
     end
-    
+
     if not self.ModulesScanned then
         self:_clearModuleListFrame()
-        self.RequireModuleCountLabel.Text = "0 modules"
-        createInstance("TextLabel", {
-            Size = UDim2.new(1, 0, 0, 50),
-            BackgroundTransparency = 1,
-            Text = "Click 'Refresh' to scan\nfor modules",
-            TextColor3 = Theme.TextMuted,
-            TextSize = 11,
-            Font = Theme.FontFamily,
-            TextXAlignment = Enum.TextXAlignment.Center,
-            TextYAlignment = Enum.TextYAlignment.Center,
-            LayoutOrder = 1,
-            Parent = self.ModuleListFrame
-        })
+        self:_setModuleCountDisplay(0)
+        self:_showModuleScanPlaceholder("Click Rescan to scan\nfor modules")
         return
     end
-    
+
     local modules = ModuleExplorer:GetFilteredModules()
-    
+
     if forceFull then
-        self._setModuleTreeRowsVisible(false)
+        pcall(function()
+            self:_setModuleTreeRowsVisible(false)
+        end)
         for path, entry in pairs(self._moduleEntryByPath or {}) do
             if entry and entry.Parent then
                 entry:Destroy()
@@ -3335,32 +3447,19 @@ function RemoteSpyUI:RefreshModuleList(forceFull)
         end
         self._moduleEntryByPath = {}
     end
-    
+
     if #modules == 0 then
-        if forceFull then
-            for path, entry in pairs(self._moduleEntryByPath or {}) do
-                if entry and entry.Parent then
-                    entry:Destroy()
-                end
+        for path, entry in pairs(self._moduleEntryByPath or {}) do
+            if entry and entry.Parent then
+                entry:Destroy()
             end
-            self._moduleEntryByPath = {}
         end
-        self.RequireModuleCountLabel.Text = "0 modules"
-        createInstance("TextLabel", {
-            Size = UDim2.new(1, 0, 0, 50),
-            BackgroundTransparency = 1,
-            Text = "No modules found",
-            TextColor3 = Theme.TextMuted,
-            TextSize = 11,
-            Font = Theme.FontFamily,
-            TextXAlignment = Enum.TextXAlignment.Center,
-            TextYAlignment = Enum.TextYAlignment.Center,
-            LayoutOrder = 1,
-            Parent = self.ModuleListFrame
-        })
+        self._moduleEntryByPath = {}
+        self:_setModuleCountDisplay(0)
+        self:_showModuleScanPlaceholder("No modules found")
         return
     end
-    
+
     self:_removeModuleScanPlaceholder()
     self:_syncFlatModuleList(modules)
 end
@@ -3369,53 +3468,31 @@ function RemoteSpyUI:RefreshModuleTreeList(forceFull)
     if not self.ModuleListFrame then
         return
     end
-    
+
     if not self.ModulesScanned then
         self:_clearModuleListFrame()
-        self.RequireModuleCountLabel.Text = "0 modules"
-        createInstance("TextLabel", {
-            Size = UDim2.new(1, 0, 0, 50),
-            BackgroundTransparency = 1,
-            Text = "Click 'Refresh' to scan\nfor modules",
-            TextColor3 = Theme.TextMuted,
-            TextSize = 11,
-            Font = Theme.FontFamily,
-            TextXAlignment = Enum.TextXAlignment.Center,
-            TextYAlignment = Enum.TextYAlignment.Center,
-            LayoutOrder = 1,
-            Parent = self.ModuleListFrame
-        })
+        self:_setModuleCountDisplay(0)
+        self:_showModuleScanPlaceholder("Click Rescan to scan\nfor modules")
         return
     end
-    
+
     local modules = ModuleExplorer:GetFilteredModules()
-    
+
     if forceFull then
         self:_clearModuleTreeRowsOnly()
     end
-    
+
     if #modules == 0 then
-        if forceFull then
-            self:_clearModuleTreeRowsOnly()
-        end
-        self.RequireModuleCountLabel.Text = "0 modules"
+        self:_clearModuleTreeRowsOnly()
+        self:_setFlatModuleListVisible(false)
+        self:_setModuleCountDisplay(0)
         if not ModuleExplorer._scanRunning then
-            createInstance("TextLabel", {
-                Size = UDim2.new(1, 0, 0, 50),
-                BackgroundTransparency = 1,
-                Text = "No modules found",
-                TextColor3 = Theme.TextMuted,
-                TextSize = 11,
-                Font = Theme.FontFamily,
-                TextXAlignment = Enum.TextXAlignment.Center,
-                TextYAlignment = Enum.TextYAlignment.Center,
-                LayoutOrder = 1,
-                Parent = self.ModuleListFrame
-            })
+            self:_showModuleScanPlaceholder("No modules found")
         end
         return
     end
-    
+
+    self:_removeModuleScanPlaceholder()
     self:_setFlatModuleListVisible(false)
     self:_applyModuleTreeRowsIncremental(true)
 end
@@ -3599,16 +3676,16 @@ function RemoteSpyUI:_updateModuleBranchEntry(entry, treeNode, depth)
         arrowExpanded = isExpanded,
     })
     
-    local nameLabel = entry:FindFirstChild("TreeNodeName")
+    local nameLabel = self:_findTreeChild(entry, "TreeNodeName")
     if nameLabel then
         nameLabel.Text = moduleData and moduleData.Name or treeNode.Name
     end
-    
-    local countLabel = entry:FindFirstChild("FolderModuleCount")
+
+    local countLabel = self:_findTreeChild(entry, "FolderModuleCount")
     if countLabel then
         countLabel.Text = tostring(countModulesInTreeNode(treeNode))
     end
-    
+
     local stroke = entry:FindFirstChildOfClass("UIStroke")
     if stroke then
         stroke:Destroy()
@@ -3619,22 +3696,22 @@ function RemoteSpyUI:_updateModuleFolderEntry(entry, folderNode, depth)
     local key = folderNode.Key
     local isExpanded = self.ExpandedModuleTreeNodes[key] == true
     local layout = self:_getModuleTreeLayout(depth)
-    
+
     self:_applyModuleTreeRowLayout(entry, depth, {
         arrowExpanded = isExpanded,
     })
-    
-    local folderIcon = entry:FindFirstChild("TreeFolderIcon")
+
+    local folderIcon = self:_findTreeChild(entry, "TreeFolderIcon")
     if folderIcon then
         folderIcon.Position = UDim2.new(0, layout.badge, 0.5, 0)
     end
-    
-    local countLabel = entry:FindFirstChild("FolderModuleCount")
+
+    local countLabel = self:_findTreeChild(entry, "FolderModuleCount")
     if countLabel then
         countLabel.Text = tostring(countModulesInTreeNode(folderNode))
     end
-    
-    local nameLabel = entry:FindFirstChild("TreeNodeName")
+
+    local nameLabel = self:_findTreeChild(entry, "TreeNodeName")
     if nameLabel then
         nameLabel.Text = folderNode.Name
     end
@@ -3661,7 +3738,7 @@ function RemoteSpyUI:CreateModuleEntry(moduleData, order, depth, treeMode)
     
     if treeMode then
         createModuleTreeArrow(header, false, layout)
-        local arrow = header:FindFirstChild("TreeArrow")
+        local arrow = self:_findTreeChild(header, "TreeArrow")
         if arrow then
             arrow.Visible = false
         end
@@ -3778,6 +3855,10 @@ function RemoteSpyUI:PopulateContentsPanel(moduleData)
         end
         
         self.SelectedModuleEntry = entry
+
+        if ModuleExplorer.SearchFilter ~= "" then
+            self:RefreshModuleList(false)
+        end
         
         for _, child in ipairs(self.ContentsListFrame:GetChildren()) do
             if child:IsA("Frame") or child:IsA("TextButton") or child:IsA("TextLabel") then
@@ -4039,6 +4120,31 @@ function RemoteSpyUI:PopulateModuleDetailsPanel(contentData)
             copyToClipboard(script)
             UIComponents.Notification(self.ScreenGui, "Decompiled code copied", "success")
         end).LayoutOrder = 3
+
+        UIComponents.Button(moduleBtnRow, "Resolve GC", nil, function()
+            local result = ModuleExplorer:ResolveInGC(moduleData)
+            if not result.Ok then
+                UIComponents.Notification(self.ScreenGui, result.Error or "GC resolve failed", "error")
+                return
+            end
+            local exact, similar = 0, 0
+            for _, match in ipairs(result.Matches) do
+                if match.Kind == "exact" then
+                    exact += 1
+                else
+                    similar += 1
+                end
+            end
+            if exact + similar == 0 then
+                UIComponents.Notification(self.ScreenGui, "No GC matches for this return", "info")
+            else
+                UIComponents.Notification(
+                    self.ScreenGui,
+                    string.format("GC: %d exact, %d similar (%s)", exact, similar, tostring(result.TargetType)),
+                    "success"
+                )
+            end
+        end).LayoutOrder = 4
     end
     
     
@@ -4086,6 +4192,38 @@ function RemoteSpyUI:PopulateModuleDetailsPanel(contentData)
                     LayoutOrder = 5,
                     Parent = self.ModuleDetailsFrame
                 })
+
+                local index = moduleData.SearchIndex or moduleEntry.SearchIndex
+                if index then
+                    local keyCount = 0
+                    if index.KeysBlob and index.KeysBlob ~= "" then
+                        for _ in string.gmatch(index.KeysBlob, "[^\n]+") do
+                            keyCount += 1
+                        end
+                    end
+                    local constCount = 0
+                    if index.ConstantsBlob and index.ConstantsBlob ~= "" then
+                        for _ in string.gmatch(index.ConstantsBlob, "[^\n]+") do
+                            constCount += 1
+                        end
+                    end
+                    createInstance("TextLabel", {
+                        Size = UDim2.new(1, 0, 0, 16),
+                        BackgroundTransparency = 1,
+                        Text = string.format(
+                            "Search index: %d keys, %d constants%s",
+                            keyCount,
+                            constCount,
+                            (index.SourceReady and index.SourceBlob and index.SourceBlob ~= "") and ", source" or ""
+                        ),
+                        TextColor3 = Theme.TextMuted,
+                        TextSize = 10,
+                        Font = Theme.FontFamily,
+                        TextXAlignment = Enum.TextXAlignment.Left,
+                        LayoutOrder = 6,
+                        Parent = self.ModuleDetailsFrame
+                    })
+                end
             end
         end
         
@@ -4422,6 +4560,36 @@ end
 function RemoteSpyUI:_syncRemoteSpyButton()
     syncSpyIconButton(self.RemoteSpyButton, RemoteScanner.IsSpying, "Start Spy", "Stop Spy")
     self:UpdateStatusLabel()
+end
+
+function RemoteSpyUI:_syncTitleActions()
+    if not self.TitleActions then
+        return
+    end
+    if self.IsMinimized then
+        self.TitleActions.Visible = false
+        return
+    end
+    local tab = self.CurrentTab
+    local show = tab == "Remotes" or tab == "Modules"
+    self.TitleActions.Visible = show
+    if self.RemotesTitleActions then
+        self.RemotesTitleActions.Visible = tab == "Remotes"
+    end
+    if self.ModulesTitleActions then
+        self.ModulesTitleActions.Visible = tab == "Modules"
+    end
+end
+
+function RemoteSpyUI:_setModuleCountDisplay(count)
+    if not self.RequireModuleCountLabel then
+        return
+    end
+    if count == nil then
+        self.RequireModuleCountLabel.Text = "…"
+        return
+    end
+    self.RequireModuleCountLabel.Text = tostring(math.max(0, math.floor(tonumber(count) or 0)))
 end
 
 function RemoteSpyUI:_syncHttpSpyButton()
@@ -5490,10 +5658,10 @@ function RemoteSpyUI:SwitchTab(tabName)
     self.RequireTab.Visible = tabName == "Modules"
     self.HttpTab.Visible = tabName == "HTTP"
     self.SettingsTab.Visible = tabName == "Settings"
-    
+
     self.CurrentTab = tabName
-    
-    
+    self:_syncTitleActions()
+
     if tabName == "Remotes" then
         self._remoteDirty = false
         self:_syncRemoteSpyButton()
@@ -6088,37 +6256,21 @@ function RemoteSpyUI:CreateRemoteGroupEntry(group, order)
     
     createTypeIcon(header, info.Type, 18, UDim2.new(0, 6, 0.5, 0))
 
-    local dirIndicator = ""
-    local dirColor = Theme.TextMuted
-    if hasIncoming and hasOutgoing then
-        dirIndicator = "⇅"
-        dirColor = Theme.Purple
-    elseif hasIncoming then
-        dirIndicator = "▼"
-        dirColor = Theme.Cyan
-    elseif hasOutgoing then
-        dirIndicator = "▲"
-        dirColor = Theme.Success
-    end
-    if dirIndicator ~= "" then
-        createInstance("TextLabel", {
+    local hasDir = hasIncoming or hasOutgoing
+    if hasDir then
+        createDirectionIndicator(header, hasIncoming, hasOutgoing, {
             Name = "DirIndicator",
-            Size = UDim2.new(0, 12, 1, 0),
-            Position = UDim2.new(0, 26, 0, 0),
-            BackgroundTransparency = 1,
-            Text = dirIndicator,
-            TextColor3 = dirColor,
-            TextSize = 10,
-            Font = Theme.FontFamilyBold,
+            SizePx = 10,
+            Width = 12,
+            Position = UDim2.new(0, 26, 0.5, 0),
+            AnchorPoint = Vector2.new(0, 0.5),
             ZIndex = 2,
-            Parent = header,
         })
     end
-    
-    
+
     createInstance("TextLabel", {
         Size = UDim2.new(1, -100, 1, 0),
-        Position = UDim2.new(0, dirIndicator ~= "" and 40 or 28, 0, 0),
+        Position = UDim2.new(0, hasDir and 40 or 28, 0, 0),
         BackgroundTransparency = 1,
         Text = info.Name,
         TextColor3 = isIgnored and Theme.TextMuted or Theme.TextPrimary,
@@ -6262,29 +6414,13 @@ function RemoteSpyUI:CreateArgGroupEntryInPanel(remotePath, argGroup, order, rem
     
     local argHasIncoming = argGroup.HasIncoming
     local argHasOutgoing = argGroup.HasOutgoing
-    
-    local dirIndicator = ""
-    local dirColor = Theme.TextMuted
-    if argHasIncoming and argHasOutgoing then
-        dirIndicator = "⇅"
-        dirColor = Theme.Purple
-    elseif argHasIncoming then
-        dirIndicator = "▼"
-        dirColor = Theme.Cyan
-    elseif argHasOutgoing then
-        dirIndicator = "▲"
-        dirColor = Theme.Success
-    end
-    
-    createInstance("TextLabel", {
-        Size = UDim2.new(0, 16, 1, 0),
-        Position = UDim2.new(0, 4, 0, 0),
-        BackgroundTransparency = 1,
-        Text = dirIndicator,
-        TextColor3 = dirColor,
-        TextSize = 11,
-        Font = Theme.FontFamilyBold,
-        Parent = header
+
+    createDirectionIndicator(header, argHasIncoming, argHasOutgoing, {
+        SizePx = 10,
+        Width = 16,
+        Position = UDim2.new(0, 4, 0.5, 0),
+        AnchorPoint = Vector2.new(0, 0.5),
+        ZIndex = 2,
     })
     
     
@@ -6469,28 +6605,12 @@ function RemoteSpyUI:CreateArgGroupEntry(parent, remotePath, argGroup, order, re
         if argHasIncoming and argHasOutgoing then break end
     end
     
-    local dirIndicator = ""
-    local dirColor = Theme.TextMuted
-    if argHasIncoming and argHasOutgoing then
-        dirIndicator = "⇅"
-        dirColor = Theme.Purple
-    elseif argHasIncoming then
-        dirIndicator = "▼"
-        dirColor = Theme.Cyan
-    elseif argHasOutgoing then
-        dirIndicator = "▲"
-        dirColor = Theme.Success
-    end
-    
-    createInstance("TextLabel", {
-        Size = UDim2.new(0, 12, 1, 0),
-        Position = UDim2.new(0, 18, 0, 0),
-        BackgroundTransparency = 1,
-        Text = dirIndicator,
-        TextColor3 = dirColor,
-        TextSize = 10,
-        Font = Theme.FontFamilyBold,
-        Parent = header
+    createDirectionIndicator(header, argHasIncoming, argHasOutgoing, {
+        SizePx = 10,
+        Width = 12,
+        Position = UDim2.new(0, 18, 0.5, 0),
+        AnchorPoint = Vector2.new(0, 0.5),
+        ZIndex = 2,
     })
     
     
@@ -6722,27 +6842,35 @@ function RemoteSpyUI:CreateLogEntry(parent, log, order)
     end
     
     
-    if log.IsIncoming then
-        createInstance("TextLabel", {
-            Size = UDim2.new(0, 30, 1, 0),
-            Position = UDim2.new(1, -35, 0, 0),
+    do
+        local isIncoming = log.IsIncoming == true
+        local dirColor = isIncoming and Theme.Cyan or Theme.Success
+        local dirHost = createInstance("Frame", {
+            Name = "LogDirection",
+            Size = UDim2.new(0, 34, 1, 0),
+            Position = UDim2.new(1, -38, 0, 0),
             BackgroundTransparency = 1,
-            Text = "▼ IN",
-            TextColor3 = Theme.Cyan,
-            TextSize = 8,
-            Font = Theme.FontFamilyBold,
-            Parent = entry
+            ZIndex = 2,
+            Parent = entry,
         })
-    else
+        createDirectionIndicator(dirHost, isIncoming, not isIncoming, {
+            SizePx = 8,
+            Width = 10,
+            Position = UDim2.new(0, 0, 0.5, 0),
+            AnchorPoint = Vector2.new(0, 0.5),
+            ZIndex = 2,
+        })
         createInstance("TextLabel", {
-            Size = UDim2.new(0, 30, 1, 0),
-            Position = UDim2.new(1, -35, 0, 0),
+            Size = UDim2.new(0, 22, 1, 0),
+            Position = UDim2.new(0, 12, 0, 0),
             BackgroundTransparency = 1,
-            Text = "▲ OUT",
-            TextColor3 = Theme.Success,
+            Text = isIncoming and "IN" or "OUT",
+            TextColor3 = dirColor,
             TextSize = 8,
             Font = Theme.FontFamilyBold,
-            Parent = entry
+            TextXAlignment = Enum.TextXAlignment.Left,
+            ZIndex = 2,
+            Parent = dirHost,
         })
     end
     
@@ -9067,11 +9195,12 @@ function RemoteSpyUI:_restoreFromMinimized()
         if self.ResizeHandle then
             self.ResizeHandle.Visible = true
         end
+        self:_syncTitleActions()
     end)
 end
 
 function RemoteSpyUI:ToggleMinimize()
-    local titleH = Theme.TitleBarHeight or 44
+    local titleH = self:GetTitleBarHeight()
     if not self.MainFrame then
         return
     end
@@ -9093,11 +9222,13 @@ function RemoteSpyUI:ToggleMinimize()
     if self.ResizeHandle then
         self.ResizeHandle.Visible = false
     end
+    if self.TitleActions then
+        self.TitleActions.Visible = false
+    end
     self:_syncMinimizeButtonIcon()
 end
 
 function RemoteSpyUI:ToggleMaximize()
-    -- Same control as minimize: restore when collapsed (no separate fullscreen).
     self:ToggleMinimize()
 end
 
@@ -9106,14 +9237,28 @@ function RemoteSpyUI:MakeDraggable()
     local dragStart = nil
     local startPos = nil
     
+    local function pointInside(gui, pos)
+        if not gui or not gui.Parent or not gui.Visible then
+            return false
+        end
+        local absPos = gui.AbsolutePosition
+        local absSize = gui.AbsoluteSize
+        return pos.X >= absPos.X and pos.X <= absPos.X + absSize.X
+            and pos.Y >= absPos.Y and pos.Y <= absPos.Y + absSize.Y
+    end
+
     self:_trackConnection(self.TitleBar.InputBegan:Connect(function(input)
         if self._destroying or not self.MainFrame then
             return
         end
         if input.UserInputType == Enum.UserInputType.MouseButton1 or 
            input.UserInputType == Enum.UserInputType.Touch then
+            local pos = input.Position
+            if pointInside(self.TitleActions, pos) or pointInside(self.WindowControls, pos) then
+                return
+            end
             dragging = true
-            dragStart = input.Position
+            dragStart = pos
             startPos = self.MainFrame.Position
         end
     end))
@@ -9151,7 +9296,6 @@ function RemoteSpyUI:MakeResizable()
     local windowR = Theme.Radius.Window or 16
     local visualSize = math.max(20, math.floor(windowR * 0.95 + 0.5))
     local hitPad = 16
-    -- Gap between window silhouette and the painted arc (independent of hitPad).
     local clearance = 5
     local hostSize = visualSize + hitPad * 2
     local visualOutset = math.floor(visualSize * 0.4 + 0.5) + clearance

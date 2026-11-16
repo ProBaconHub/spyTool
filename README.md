@@ -66,11 +66,12 @@ spyTool/
     asset/spinner.png
   tools/                   — publisher scripts (not synced)
     split_and_manifest.ps1
+    fetch_squircle_assets.once.lua — one-shot: rbxassetid → UNC writefile
 ```
 
 On first install (no local `spyTool/main.lua`), the bootstrap HttpGets `installer/ui.lua` + spinner into memory, shows a usage-agreement screen (scrollable terms + acknowledge checkbox). Install is disabled until the box is checked. After confirmation it shows **Installing files** with a spinner/progress bar, then destroys the UI and cleans any temp spinner cache outside `spyTool/`. Cancel aborts with no files written.
 
-Chrome uses sliced **Squircle** image plates as the entire frame (iOS G2 continuous corners). Local plates live in `spyTool/asset/squircle/` and load via `getcustomasset` (with `rbxassetid` fallback).
+Chrome uses sliced **Squircle** plates from `asset/squircle/` via `getcustomasset` (rbxassetid fallback). To refresh HQ locals, run `tools/fetch_squircle_assets.once.lua` once in your executor (rbxassetid → EditableImage → `writefile` under `spyTool/asset/squircle/`).
 
 Settings stay outside the sync tree at `ProBaconHub/RemoteSpySettings.json`.
 

@@ -1,18 +1,26 @@
 -- spyTool/modules/09_module_explorer.lua
 
 local ModuleExplorer = {
-    AllModules = {},           
-    LoadedModules = {},        
+    AllModules = {},
+    LoadedModules = {},
     SearchFilter = "",
-    SortMode = "name",         
+    SortMode = "name",
+    DeepSearch = true,
     OnModulesRefreshed = nil,
     _scanId = 0,
     _scanRunning = false,
+    _sourceIndexRunning = false,
+    _sourceIndexGen = 0,
 }
 
 local MODULE_SCAN_BATCH_SIZE = 100
 local MODULE_SCAN_TRAVERSE_YIELD_EVERY = 800
 local MODULE_UI_YIELD_EVERY = 12
+local MODULE_SOURCE_INDEX_YIELD_EVERY = 8
+local MODULE_CONSTANT_MAX = 80
+local MODULE_CONSTANT_MAX_LEN = 120
+local MODULE_SOURCE_BLOB_MAX = 24000
+local MODULE_BACKGROUND_DECOMPILE = false
 
 function ModuleExplorer:GetScanContainers()
     local containers = {
@@ -55,19 +63,288 @@ end
 
 function ModuleExplorer:PurgeAll()
     self:CancelScan()
+    self._sourceIndexGen = (self._sourceIndexGen or 0) + 1
+    self._sourceIndexRunning = false
     self.AllModules = {}
     self.LoadedModules = {}
     self.OnModulesRefreshed = nil
+end
+
+local function appendUniqueLower(list, seen, value, maxLen)
+    if type(value) ~= "string" then
+        return
+    end
+    if #value < 2 or #value > (maxLen or MODULE_CONSTANT_MAX_LEN) then
+        return
+    end
+    local lower = value:lower()
+    if seen[lower] then
+        return
+    end
+    seen[lower] = true
+    list[#list + 1] = lower
+end
+
+local function collectFunctionStringConstants(func, into, seen, budget)
+    if type(func) ~= "function" or budget.left <= 0 then
+        return
+    end
+    if not debug.getconstants then
+        return
+    end
+    local ok, consts = pcall(debug.getconstants, func)
+    if not ok or type(consts) ~= "table" then
+        return
+    end
+    for _, constant in ipairs(consts) do
+        if budget.left <= 0 then
+            break
+        end
+        if type(constant) == "string" then
+            local before = #into
+            appendUniqueLower(into, seen, constant, MODULE_CONSTANT_MAX_LEN)
+            if #into > before then
+                budget.left -= 1
+            end
+        end
+    end
+end
+
+function ModuleExplorer:BuildResultSearchIndex(result)
+    local keys = {}
+    local keySeen = {}
+    local constants = {}
+    local constSeen = {}
+    local budget = {left = MODULE_CONSTANT_MAX}
+    local returnType = type(result)
+
+    if returnType == "table" then
+        pcall(function()
+            for key, value in pairs(result) do
+                if type(key) == "string" and key:sub(1, 2) == "__" then
+                    continue
+                end
+                appendUniqueLower(keys, keySeen, tostring(key), MODULE_CONSTANT_MAX_LEN)
+                if type(value) == "function" then
+                    collectFunctionStringConstants(value, constants, constSeen, budget)
+                elseif type(value) == "string" then
+                    appendUniqueLower(constants, constSeen, value, MODULE_CONSTANT_MAX_LEN)
+                    budget.left -= 1
+                end
+            end
+        end)
+    elseif returnType == "function" then
+        collectFunctionStringConstants(result, constants, constSeen, budget)
+    elseif returnType == "string" then
+        appendUniqueLower(constants, constSeen, result, MODULE_CONSTANT_MAX_LEN)
+    end
+
+    return {
+        KeysBlob = table.concat(keys, "\n"),
+        ConstantsBlob = table.concat(constants, "\n"),
+        SourceBlob = nil,
+        ReturnType = returnType,
+        IndexedAt = os.clock(),
+    }
+end
+
+function ModuleExplorer:BuildSourceSearchIndex(moduleData, opts)
+    opts = opts or {}
+    if not moduleData then
+        return nil
+    end
+    local allowDecompile = opts.AllowDecompile == true or MODULE_BACKGROUND_DECOMPILE
+    local sourceText = nil
+    local mod = moduleData.Module
+    if mod then
+        pcall(function()
+            local src = mod.Source
+            if type(src) == "string" and #src > 0 then
+                sourceText = src
+            end
+        end)
+        if (not sourceText or sourceText == "") and allowDecompile and decompile then
+            local ok, result = pcall(decompile, mod)
+            if ok and type(result) == "string" and #result > 0 then
+                sourceText = result
+            end
+        end
+    end
+    if not sourceText or sourceText == "" then
+        return {
+            SourceBlob = "",
+            SourceReady = true,
+            IndexedAt = os.clock(),
+        }
+    end
+    local lower = sourceText:lower()
+    if #lower > MODULE_SOURCE_BLOB_MAX then
+        lower = string.sub(lower, 1, MODULE_SOURCE_BLOB_MAX)
+    end
+    return {
+        SourceBlob = lower,
+        SourceReady = true,
+        IndexedAt = os.clock(),
+    }
+end
+
+function ModuleExplorer:AttachSearchIndex(moduleData, index)
+    if not moduleData or not index then
+        return
+    end
+    local existing = moduleData.SearchIndex or {}
+    for key, value in pairs(index) do
+        existing[key] = value
+    end
+    moduleData.SearchIndex = existing
+end
+
+function ModuleExplorer:EnsureSourceIndex(moduleData, opts)
+    if not moduleData then
+        return nil
+    end
+    local index = moduleData.SearchIndex
+    if index and index.SourceReady then
+        return index
+    end
+    local sourceIndex = self:BuildSourceSearchIndex(moduleData, opts)
+    self:AttachSearchIndex(moduleData, sourceIndex)
+    return moduleData.SearchIndex
+end
+
+function ModuleExplorer:GetSearchMatchTier(moduleData, filter)
+    if not filter or filter == "" then
+        return 1
+    end
+    filter = filter:lower()
+    local nameLower = (moduleData.Name or ""):lower()
+    local pathLower = (moduleData.Path or ""):lower()
+    if nameLower:find(filter, 1, true) or pathLower:find(filter, 1, true) then
+        return 1
+    end
+
+    local index = moduleData.SearchIndex
+    if not index then
+        return nil
+    end
+    if (index.KeysBlob and index.KeysBlob ~= "" and index.KeysBlob:find(filter, 1, true))
+        or (index.ConstantsBlob and index.ConstantsBlob ~= "" and index.ConstantsBlob:find(filter, 1, true)) then
+        return 2
+    end
+    if self.DeepSearch and index.SourceBlob and index.SourceBlob ~= ""
+        and index.SourceBlob:find(filter, 1, true) then
+        return 3
+    end
+    return nil
 end
 
 function ModuleExplorer:ModuleMatchesFilter(moduleData)
     if self.SearchFilter == "" then
         return true
     end
-    local filter = self.SearchFilter:lower()
-    local nameLower = moduleData.Name:lower()
-    local pathLower = moduleData.Path:lower()
-    return nameLower:find(filter, 1, true) ~= nil or pathLower:find(filter, 1, true) ~= nil
+    return self:GetSearchMatchTier(moduleData, self.SearchFilter) ~= nil
+end
+
+function ModuleExplorer:StartBackgroundSourceIndexing()
+    if self._sourceIndexRunning then
+        return
+    end
+    self._sourceIndexGen = (self._sourceIndexGen or 0) + 1
+    local gen = self._sourceIndexGen
+    self._sourceIndexRunning = true
+    task.spawn(function()
+        local processed = 0
+        for _, moduleData in ipairs(self.AllModules) do
+            if self._sourceIndexGen ~= gen then
+                break
+            end
+            if moduleData and not (moduleData.SearchIndex and moduleData.SearchIndex.SourceReady) then
+                self:EnsureSourceIndex(moduleData, {AllowDecompile = false})
+                processed += 1
+                if processed % MODULE_SOURCE_INDEX_YIELD_EVERY == 0 then
+                    RunService.Heartbeat:Wait()
+                end
+            end
+        end
+        if self._sourceIndexGen == gen then
+            self._sourceIndexRunning = false
+        end
+    end)
+end
+
+function ModuleExplorer:ResolveInGC(moduleData, opts)
+    opts = opts or {}
+    local entry = moduleData and self.LoadedModules[moduleData.Path]
+    if not entry or not entry.LoadSuccess then
+        return {
+            Ok = false,
+            Error = "Module is not loaded",
+            Matches = {},
+        }
+    end
+    if type(getgc) ~= "function" then
+        return {
+            Ok = false,
+            Error = "getgc is not available",
+            Matches = {},
+        }
+    end
+
+    local target = entry.Result
+    local includeTables = opts.IncludeTables ~= false
+    local maxMatches = math.clamp(tonumber(opts.MaxMatches) or 32, 1, 128)
+    local matches = {}
+    local ok, err = pcall(function()
+        for _, obj in ipairs(getgc(true)) do
+            if #matches >= maxMatches then
+                break
+            end
+            if rawequal(obj, target) then
+                matches[#matches + 1] = {
+                    Kind = "exact",
+                    Type = type(obj),
+                    Value = obj,
+                }
+            elseif includeTables and type(target) == "table" and type(obj) == "table" and obj ~= target then
+                local shared = 0
+                local checked = 0
+                for key, value in pairs(target) do
+                    checked += 1
+                    if checked > 24 then
+                        break
+                    end
+                    local okIndex, other = pcall(function()
+                        return obj[key]
+                    end)
+                    if okIndex and rawequal(other, value) then
+                        shared += 1
+                    end
+                end
+                if shared >= 3 or (checked > 0 and shared == checked) then
+                    matches[#matches + 1] = {
+                        Kind = "similar",
+                        Type = "table",
+                        Value = obj,
+                        SharedKeys = shared,
+                    }
+                end
+            end
+        end
+    end)
+
+    if not ok then
+        return {
+            Ok = false,
+            Error = tostring(err),
+            Matches = {},
+        }
+    end
+    return {
+        Ok = true,
+        Error = nil,
+        Matches = matches,
+        TargetType = type(target),
+    }
 end
 
 local function flushModuleScanBatch(explorer, modules, pendingBatch, onBatchFound)
@@ -169,6 +446,8 @@ function ModuleExplorer:ScanAllModulesAsync(onProgress, onComplete, onBatchFound
         end)
         modules = self.AllModules
         self._scanRunning = false
+
+        self:StartBackgroundSourceIndexing()
         
         if onComplete then
             onComplete(#modules)
@@ -196,31 +475,28 @@ function ModuleExplorer:GetFilteredModules()
     if self.SearchFilter == "" then
         return self.AllModules
     end
-    
+
     local filter = self.SearchFilter:lower()
-    local nameMatches = {}
-    local pathMatches = {}
-    
+    local tierBuckets = {
+        [1] = {},
+        [2] = {},
+        [3] = {},
+    }
+
     for _, mod in ipairs(self.AllModules) do
-        local nameMatch = mod.Name:lower():find(filter, 1, true) ~= nil
-        local pathMatch = mod.Path:lower():find(filter, 1, true) ~= nil
-        
-        if nameMatch then
-            table.insert(nameMatches, mod)
-        elseif pathMatch then
-            table.insert(pathMatches, mod)
+        local tier = self:GetSearchMatchTier(mod, filter)
+        if tier and tierBuckets[tier] then
+            table.insert(tierBuckets[tier], mod)
+            mod.LastSearchTier = tier
         end
     end
-    
-    
+
     local filtered = {}
-    for _, mod in ipairs(nameMatches) do
-        table.insert(filtered, mod)
+    for tier = 1, 3 do
+        for _, mod in ipairs(tierBuckets[tier]) do
+            table.insert(filtered, mod)
+        end
     end
-    for _, mod in ipairs(pathMatches) do
-        table.insert(filtered, mod)
-    end
-    
     return filtered
 end
 
@@ -507,8 +783,9 @@ function ModuleExplorer:RequireModule(moduleData)
         Result = nil,
         LoadSuccess = false,
         LoadError = nil,
-        Contents = {},   
-        SortedContents = nil,  
+        Contents = {},
+        SortedContents = nil,
+        SearchIndex = nil,
     }
     
     local success, result = pcall(function()
@@ -519,6 +796,18 @@ function ModuleExplorer:RequireModule(moduleData)
     if success then
         entry.Result = result
         entry.Contents = self:AnalyzeModuleContents(result)
+        local resultIndex = self:BuildResultSearchIndex(result)
+        entry.SearchIndex = resultIndex
+        self:AttachSearchIndex(moduleData, resultIndex)
+        if not (moduleData.SearchIndex and moduleData.SearchIndex.SourceReady) then
+            task.spawn(function()
+                self:EnsureSourceIndex(moduleData, {AllowDecompile = true})
+                if entry.SearchIndex and moduleData.SearchIndex then
+                    entry.SearchIndex.SourceBlob = moduleData.SearchIndex.SourceBlob
+                    entry.SearchIndex.SourceReady = moduleData.SearchIndex.SourceReady
+                end
+            end)
+        end
     else
         entry.LoadError = tostring(result)
     end

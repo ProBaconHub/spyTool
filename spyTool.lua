@@ -85,7 +85,6 @@ local function resolveLocalBootstrapPath()
     return nil
 end
 
--- Public HttpGet bootstrap → local workspace bootstrap when .dev is present.
 do
     local env = getDevGenv()
     local alreadyLocal = env and env[DEV_HANDOFF_KEY] == true
@@ -152,7 +151,6 @@ local function httpGet(url)
     url = withCacheBust(url)
     local getters = {}
 
-    -- Prefer executor request APIs with no-cache headers.
     if type(request) == "function" then
         getters[#getters + 1] = function()
             return requestNoCache(request, url)
@@ -169,7 +167,6 @@ local function httpGet(url)
         end
     end
 
-    -- Roblox HttpGet/HttpGetAsync second arg = nocache.
     if type(game) == "userdata" or type(game) == "table" then
         getters[#getters + 1] = function()
             return game:HttpGet(url, true)
@@ -206,7 +203,6 @@ end
 
 local function rawUrl(relPath)
     relPath = tostring(relPath or ""):gsub("^/+", "")
-    -- Cache bust is applied again inside httpGet; keep a unique path query here too.
     return withCacheBust(RAW_BASE .. "/" .. relPath)
 end
 

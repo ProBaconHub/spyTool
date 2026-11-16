@@ -150,6 +150,10 @@ function UIComponents.IconButton(parent, icon, callback, size, tooltip)
             textFallback = "C"
         elseif icon == "rescan.png" then
             textFallback = "R"
+        elseif icon == "search.png" then
+            textFallback = "Q"
+        elseif icon == "more.png" then
+            textFallback = "…"
         else
             textFallback = "•"
         end
@@ -1003,34 +1007,106 @@ function UIComponents.NumberBox(parent, min, max, initialValue, step, callback, 
     return container, function(v) applyValue(v) end, function() return value end
 end
 
-function UIComponents.SearchBar(parent, placeholder, callback)
-    local container = createSquircle(Theme.Radius.Small, "Squircle", {
-        Size = UDim2.new(1, 0, 1, 0),
-        ImageColor3 = Theme.BackgroundSecondary,
-        Parent = parent,
-    }, false)
-    local outline = createSquircle(Theme.Radius.Small, "SquircleOutline", {
-        Name = "Outline",
-        Size = UDim2.new(1, 0, 1, 0),
-        ImageColor3 = Theme.Border,
-        ZIndex = 0,
+function UIComponents.SearchBar(parent, placeholder, callback, opts)
+    opts = opts or {}
+    local usePill = opts.Pill == true
+    local showIcon = opts.Icon ~= false
+    local iconFile = opts.IconFile or "search.png"
+    local radiusPx = usePill and (tonumber(opts.Radius) or 999) or Theme.Radius.Small
+    local showOutline = opts.Outline ~= false and not usePill
+    local leftPad = showIcon and 30 or 10
+    local fillColor = opts.ImageColor3 or Theme.BackgroundSecondary
+    local cornerRadius = usePill and (Theme.CornerRadiusFull or UDim.new(0, 999)) or UDim.new(0, radiusPx)
+    local expandable = opts.Expandable == true
+    local expandDuration = tonumber(opts.ExpandDuration) or 0.2
+    local placeholderText = placeholder or "Search..."
+
+    local container
+    do
+        local ok, group = pcall(function()
+            return createInstance("CanvasGroup", {
+                Name = "SearchBar",
+                Size = UDim2.new(1, 0, 1, 0),
+                BackgroundColor3 = fillColor,
+                BorderSizePixel = 0,
+                Parent = parent,
+            })
+        end)
+        if ok and group then
+            container = group
+        else
+            container = createInstance("Frame", {
+                Name = "SearchBar",
+                Size = UDim2.new(1, 0, 1, 0),
+                BackgroundColor3 = fillColor,
+                BorderSizePixel = 0,
+                ClipsDescendants = true,
+                Parent = parent,
+            })
+        end
+    end
+    createInstance("UICorner", {
+        CornerRadius = cornerRadius,
         Parent = container,
-    }, false)
-    
+    })
+
+    local outline = nil
+    if showOutline then
+        outline = createInstance("UIStroke", {
+            Name = "Outline",
+            Color = Theme.Border,
+            Thickness = 1,
+            ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+            Parent = container,
+        })
+    end
+
+    local icon = nil
+    if showIcon then
+        icon = createInstance("ImageLabel", {
+            Name = "SearchIcon",
+            Size = UDim2.new(0, 14, 0, 14),
+            Position = UDim2.new(0, 10, 0.5, 0),
+            AnchorPoint = Vector2.new(0, 0.5),
+            BackgroundTransparency = 1,
+            Image = "",
+            ImageColor3 = Theme.TextMuted,
+            ScaleType = Enum.ScaleType.Fit,
+            ZIndex = 2,
+            Parent = container,
+        })
+        local iconUrl = getAssetImage(iconFile)
+        if iconUrl then
+            icon.Image = iconUrl
+        else
+            createInstance("TextLabel", {
+                Size = UDim2.new(1, 0, 1, 0),
+                BackgroundTransparency = 1,
+                Text = "Q",
+                TextColor3 = Theme.TextMuted,
+                TextSize = 11,
+                Font = Theme.FontFamilyBold,
+                Parent = icon,
+            })
+        end
+    end
+
     local input = createInstance("TextBox", {
-        Size = UDim2.new(1, -34, 1, 0),
-        Position = UDim2.new(0, 10, 0, 0),
+        Size = UDim2.new(1, -(leftPad + 24), 1, 0),
+        Position = UDim2.new(0, leftPad, 0, 0),
         BackgroundTransparency = 1,
         Text = "",
-        PlaceholderText = placeholder or "Search...",
+        PlaceholderText = placeholderText,
         PlaceholderColor3 = Theme.TextMuted,
         TextColor3 = Theme.TextPrimary,
         TextSize = 12,
         Font = Theme.FontFamily,
         TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd,
         ClearTextOnFocus = false,
+        ClipsDescendants = true,
         ZIndex = 1,
-        Parent = container
+        Parent = container,
     })
 
     local clearBtn = createInstance("ImageButton", {
@@ -1064,7 +1140,7 @@ function UIComponents.SearchBar(parent, placeholder, callback)
     end
 
     local function syncClearVisible()
-        clearBtn.Visible = input.Text ~= ""
+        clearBtn.Visible = (not expandable or container:GetAttribute("SearchExpanded") == true) and input.Text ~= ""
     end
 
     clearBtn.MouseButton1Click:Connect(function()
@@ -1081,20 +1157,114 @@ function UIComponents.SearchBar(parent, placeholder, callback)
     clearBtn.MouseLeave:Connect(function()
         clearBtn.ImageColor3 = Theme.TextMuted
     end)
-    
-    input.Focused:Connect(function()
-        tween(outline, {ImageColor3 = Theme.Primary}, 0.15)
-    end)
-    
-    input.FocusLost:Connect(function()
-        tween(outline, {ImageColor3 = Theme.Border}, 0.15)
-    end)
-    
-    input:GetPropertyChangedSignal("Text"):Connect(function()
-        syncClearVisible()
-        if callback then callback(input.Text) end
-    end)
-    
+
+    if expandable then
+        local wrap = parent
+        local collapsedSize = opts.CollapsedSize or UDim2.new(0, 24, 0, 24)
+        local collapsedPos = opts.CollapsedPosition or wrap.Position
+        local expandedSize = opts.ExpandedSize or UDim2.new(1, 0, 0, 24)
+        local expandedPos = opts.ExpandedPosition or UDim2.new(0, 0, 0.5, 0)
+        local isExpanded = false
+
+        local function applyCollapsedChrome()
+            if icon then
+                icon.Position = UDim2.new(0.5, 0, 0.5, 0)
+                icon.AnchorPoint = Vector2.new(0.5, 0.5)
+            end
+            input.Size = UDim2.new(1, 0, 1, 0)
+            input.Position = UDim2.new(0, 0, 0, 0)
+            input.TextTransparency = 1
+            input.PlaceholderText = ""
+            clearBtn.Visible = false
+        end
+
+        local function applyExpandedChrome()
+            if icon then
+                icon.Position = UDim2.new(0, 10, 0.5, 0)
+                icon.AnchorPoint = Vector2.new(0, 0.5)
+            end
+            input.Size = UDim2.new(1, -(leftPad + 24), 1, 0)
+            input.Position = UDim2.new(0, leftPad, 0, 0)
+            input.TextTransparency = 0
+            input.PlaceholderText = placeholderText
+            syncClearVisible()
+        end
+
+        local function setExpanded(expanded, instant)
+            expanded = expanded == true
+            if isExpanded == expanded and not instant then
+                return
+            end
+            isExpanded = expanded
+            container:SetAttribute("SearchExpanded", expanded)
+            local size = expanded and expandedSize or collapsedSize
+            local pos = expanded and expandedPos or collapsedPos
+            if instant then
+                wrap.Size = size
+                wrap.Position = pos
+            else
+                tween(wrap, {Size = size, Position = pos}, expandDuration)
+            end
+            if expanded then
+                applyExpandedChrome()
+            else
+                applyCollapsedChrome()
+            end
+        end
+
+        applyCollapsedChrome()
+        wrap.Size = collapsedSize
+        wrap.Position = collapsedPos
+        container:SetAttribute("SearchExpanded", false)
+
+        input.Focused:Connect(function()
+            setExpanded(true)
+            if outline then
+                tween(outline, {Color = Theme.Primary}, 0.15)
+            end
+        end)
+
+        input.FocusLost:Connect(function()
+            if outline then
+                tween(outline, {Color = Theme.Border}, 0.15)
+            end
+            if input.Text == "" then
+                setExpanded(false)
+            end
+        end)
+
+        input:GetPropertyChangedSignal("Text"):Connect(function()
+            if isExpanded then
+                syncClearVisible()
+            end
+            if callback then
+                callback(input.Text)
+            end
+            if input.Text ~= "" and not isExpanded then
+                setExpanded(true, true)
+            end
+        end)
+    else
+        input.Focused:Connect(function()
+            if outline then
+                tween(outline, {Color = Theme.Primary}, 0.15)
+            end
+        end)
+
+        input.FocusLost:Connect(function()
+            if outline then
+                tween(outline, {Color = Theme.Border}, 0.15)
+            end
+        end)
+
+        input:GetPropertyChangedSignal("Text"):Connect(function()
+            syncClearVisible()
+            if callback then
+                callback(input.Text)
+            end
+        end)
+    end
+
     return container, input
 end
 

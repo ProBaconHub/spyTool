@@ -35,7 +35,7 @@ local function readSource(rel)
         error("[SpyTool] missing module: " .. path)
     end
     local ok, source = pcall(readfile, path)
-    if not ok then
+            if not ok then
         error("[SpyTool] failed to readfile(" .. path .. "): " .. tostring(source))
     end
     if type(source) ~= "string" or source == "" then
@@ -44,7 +44,7 @@ local function readSource(rel)
     return source, path
 end
 
-local parts = {}
+        local parts = {}
 local loadedPaths = {}
 for i, rel in ipairs(MODULES) do
     local source, path = readSource(rel)

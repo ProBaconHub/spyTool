@@ -3,7 +3,7 @@
     "repo":  "ProBaconHub/spyTool",
     "branch":  "main",
     "algorithm":  "adler32pair-length",
-    "generatedAt":  "2026-11-16T01:28:20.6617987Z",
+    "generatedAt":  "2026-11-16T07:05:13.9716501Z",
     "files":  [
                   {
                       "path":  "asset/BindableEvent.png",
@@ -1326,6 +1326,10 @@
                       "hash":  "790:000175e30230862b"
                   },
                   {
+                      "path":  "asset/more.png",
+                      "hash":  "548:0000efcb00ee7109"
+                  },
+                  {
                       "path":  "asset/pause.png",
                       "hash":  "1031:0001c5db037cec53"
                   },
@@ -1354,44 +1358,56 @@
                       "hash":  "1567:0002a91707ee57ce"
                   },
                   {
+                      "path":  "asset/search.png",
+                      "hash":  "1524:0002cedd08469633"
+                  },
+                  {
                       "path":  "asset/settings.png",
                       "hash":  "1098:00020fdd0446fc2f"
                   },
                   {
                       "path":  "asset/squircle/circle.png",
-                      "hash":  "32678:003aa63fa42b2ee8"
+                      "hash":  "10835:000e164823bad87a"
+                  },
+                  {
+                      "path":  "asset/squircle/pill.png",
+                      "hash":  "7018:00093c1d7c30f02c"
+                  },
+                  {
+                      "path":  "asset/squircle/pill-outline.png",
+                      "hash":  "10614:0011194163b54c54"
                   },
                   {
                       "path":  "asset/squircle/squircle.png",
-                      "hash":  "32678:003aa63fa42b2ee8"
+                      "hash":  "9787:000ac913c83fa931"
                   },
                   {
                       "path":  "asset/squircle/squircle-bl-br.png",
-                      "hash":  "19542:001d59ad541e7fb4"
+                      "hash":  "5018:0005c6652d90dbf2"
                   },
                   {
                       "path":  "asset/squircle/squircle-outline.png",
-                      "hash":  "7420:000410da3ab39532"
+                      "hash":  "14470:00159f835fdfa066"
                   },
                   {
                       "path":  "asset/squircle/squircle-tl-tr.png",
-                      "hash":  "19539:001d933674d32a33"
+                      "hash":  "4916:000544b43c38454f"
                   },
                   {
                       "path":  "asset/squircle/window.png",
-                      "hash":  "7217:00079d916c899f7c"
+                      "hash":  "9787:000ac913c83fa931"
                   },
                   {
                       "path":  "asset/squircle/window-bl-br.png",
-                      "hash":  "6507:000603194360e952"
+                      "hash":  "5018:0005c6652d90dbf2"
                   },
                   {
                       "path":  "asset/squircle/window-outline.png",
-                      "hash":  "8448:000a8c91b3f5b68b"
+                      "hash":  "14470:00159f835fdfa066"
                   },
                   {
                       "path":  "asset/squircle/window-tl-tr.png",
-                      "hash":  "6561:00063dff59250261"
+                      "hash":  "4916:000544b43c38454f"
                   },
                   {
                       "path":  "asset/triangle.png",
@@ -1403,11 +1419,11 @@
                   },
                   {
                       "path":  "main.lua",
-                      "hash":  "1698:0002104a06cd579d"
+                      "hash":  "1714:0002124a06e81f1d"
                   },
                   {
                       "path":  "modules/01_core.lua",
-                      "hash":  "9844:000c11faedb071b6"
+                      "hash":  "9762:000bf570e96b98f2"
                   },
                   {
                       "path":  "modules/02_stealth.lua",
@@ -1419,11 +1435,11 @@
                   },
                   {
                       "path":  "modules/04_theme.lua",
-                      "hash":  "3132:000387f914dea6d6"
+                      "hash":  "3131:000387d914dc5ad1"
                   },
                   {
                       "path":  "modules/05_ui_kit.lua",
-                      "hash":  "51094:00398c59877a6e31"
+                      "hash":  "55934:003f15170c52e3e2"
                   },
                   {
                       "path":  "modules/06_function_analyzer.lua",
@@ -1439,23 +1455,23 @@
                   },
                   {
                       "path":  "modules/09_module_explorer.lua",
-                      "hash":  "24386:001bd9be27de61d7"
+                      "hash":  "33550:002632d6c3e533b2"
                   },
                   {
                       "path":  "modules/10_ui_components.lua",
-                      "hash":  "65649:0049f32128af0503"
+                      "hash":  "71441:00501da6cf237f8d"
                   },
                   {
                       "path":  "modules/11_ui.lua",
-                      "hash":  "325339:016fb9f0e6c51593"
+                      "hash":  "332309:0177ec2a2b117f63"
                   },
                   {
                       "path":  "README.md",
-                      "hash":  "4750:000666103b575580"
+                      "hash":  "4797:00069c323dccf71c"
                   },
                   {
                       "path":  "spyTool.lua",
-                      "hash":  "19745:00168c4a634cc1a2"
+                      "hash":  "19459:00162ae3470e9e68"
                   }
               ]
 }

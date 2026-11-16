@@ -105,80 +105,62 @@ end
 local SquircleShapeDefs = {
     Circle = {
         File = "squircle/circle.png",
-        Fallback = "rbxassetid://111665032676235",
-        LocalRect = Rect.new(310, 310, 714, 714),
-        FallbackRect = Rect.new(310, 310, 714, 714),
-        LocalRadius = 310,
-        FallbackRadius = 310,
+        Rect = Rect.new(512, 512, 512, 512),
+        Radius = 512,
     },
     Squircle = {
         File = "squircle/squircle.png",
-        Fallback = "rbxassetid://89641024074289",
-        LocalRect = Rect.new(310, 310, 714, 714),
-        FallbackRect = Rect.new(310, 310, 714, 714),
-        LocalRadius = 310,
-        FallbackRadius = 310,
+        Rect = Rect.new(460, 460, 460, 460),
+        Radius = 310,
     },
     SquircleOutline = {
         File = "squircle/squircle-outline.png",
-        Fallback = "rbxassetid://74029063732681",
-        LocalRect = Rect.new(310, 310, 714, 714),
-        FallbackRect = Rect.new(310, 310, 714, 714),
-        LocalRadius = 310,
-        FallbackRadius = 310,
+        Rect = Rect.new(512, 512, 512, 512),
+        Radius = 310,
+    },
+    Pill = {
+        File = "squircle/pill.png",
+        Rect = Rect.new(512, 325, 512, 325),
+        Radius = 325,
+    },
+    PillOutline = {
+        File = "squircle/pill-outline.png",
+        Rect = Rect.new(512, 325, 512, 325),
+        Radius = 325,
     },
     ["Squircle-TL-TR"] = {
         File = "squircle/squircle-tl-tr.png",
-        Fallback = "rbxassetid://75712142040725",
-        LocalRect = Rect.new(310, 310, 714, 714),
-        FallbackRect = Rect.new(310, 310, 714, 714),
-        LocalRadius = 310,
-        FallbackRadius = 310,
+        Rect = Rect.new(512, 512, 512, 512),
+        Radius = 310,
     },
     ["Squircle-BL-BR"] = {
         File = "squircle/squircle-bl-br.png",
-        Fallback = "rbxassetid://83676684425544",
-        LocalRect = Rect.new(310, 310, 714, 714),
-        FallbackRect = Rect.new(310, 310, 714, 714),
-        LocalRadius = 310,
-        FallbackRadius = 310,
+        Rect = Rect.new(512, 0, 512, 0),
+        Radius = 310,
     },
-    
     Window = {
         File = "squircle/window.png",
-        Fallback = "rbxassetid://89641024074289",
-        LocalRect = Rect.new(420, 420, 604, 604),
-        FallbackRect = Rect.new(310, 310, 714, 714),
-        LocalRadius = 420,
-        FallbackRadius = 310,
+        Rect = Rect.new(460, 460, 460, 460),
+        Radius = 310,
     },
     WindowOutline = {
         File = "squircle/window-outline.png",
-        Fallback = "rbxassetid://74029063732681",
-        LocalRect = Rect.new(420, 420, 604, 604),
-        FallbackRect = Rect.new(310, 310, 714, 714),
-        LocalRadius = 420,
-        FallbackRadius = 310,
+        Rect = Rect.new(512, 512, 512, 512),
+        Radius = 310,
     },
     ["Window-TL-TR"] = {
         File = "squircle/window-tl-tr.png",
-        Fallback = "rbxassetid://75712142040725",
-        LocalRect = Rect.new(420, 420, 604, 604),
-        FallbackRect = Rect.new(310, 310, 714, 714),
-        LocalRadius = 420,
-        FallbackRadius = 310,
+        Rect = Rect.new(512, 512, 512, 512),
+        Radius = 310,
     },
     ["Window-BL-BR"] = {
         File = "squircle/window-bl-br.png",
-        Fallback = "rbxassetid://83676684425544",
-        LocalRect = Rect.new(420, 420, 604, 604),
-        FallbackRect = Rect.new(310, 310, 714, 714),
-        LocalRadius = 420,
-        FallbackRadius = 310,
+        Rect = Rect.new(512, 0, 512, 0),
+        Radius = 310,
     },
 }
 
-local SquircleShapes = {} 
+local SquircleShapes = {}
 
 local function resolveRadiusPx(radius)
     if typeof(radius) == "UDim" then
@@ -193,19 +175,13 @@ local function getSquircleShape(shapeType)
         return cached
     end
     local def = SquircleShapeDefs[shapeType] or SquircleShapeDefs.Squircle
-    
-    
     local localImage = getAssetImage(def.File)
-    local useLocal = type(localImage) == "string" and localImage ~= ""
-    if not useLocal and (type(def.Fallback) ~= "string" or def.Fallback == "") then
-        useLocal = false
-    end
     cached = {
-        Image = useLocal and localImage or def.Fallback,
-        Rect = useLocal and def.LocalRect or def.FallbackRect,
-        Radius = useLocal and def.LocalRadius or def.FallbackRadius,
+        Image = (type(localImage) == "string" and localImage) or "",
+        Rect = def.Rect,
+        Radius = def.Radius,
         File = def.File,
-        Source = useLocal and "local" or "cdn",
+        Source = "local",
     }
     SquircleShapes[shapeType] = cached
     return cached
@@ -226,49 +202,141 @@ local function measureTextWidth(text, textSize, font)
     return math.max(8, math.ceil(#text * textSize * 0.55))
 end
 
-createSquircle = function(radius, shapeType, props, interactive)
+local function createPill(props, outline)
     props = props or {}
-    shapeType = shapeType or "Squircle"
-    local shape = getSquircleShape(shapeType)
-    local radiusPx = math.clamp(resolveRadiusPx(radius), 0.5, shape.Radius)
-    local className = interactive and "ImageButton" or "ImageLabel"
-    local sliceScale = math.clamp(radiusPx / shape.Radius, 0.0001, 1)
+    local shapeKey = outline and "PillOutline" or "Pill"
+    local shape = getSquircleShape(shapeKey)
+    local def = SquircleShapeDefs[shapeKey]
+    local shapeRadius = shape.Radius or 325
+    local imageUrl = shape.Image
+    
+    local radiusPx = tonumber(props.PillRadius) or resolveRadiusPx(props.Radius) or 999
+    if radiusPx <= 0 then
+        radiusPx = 999
+    end
+    local sliceScale = math.max(radiusPx / shapeRadius, 0.0001)
 
+    local className = props.Interactive and "ImageButton" or "ImageLabel"
     local defaults = {
+        Name = props.Name or shapeKey,
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        Image = shape.Image,
+        Image = imageUrl,
         ImageColor3 = props.ImageColor3 or Theme.BackgroundTertiary,
         ImageTransparency = props.ImageTransparency or 0,
         ScaleType = Enum.ScaleType.Slice,
-        SliceCenter = shape.Rect,
+        SliceCenter = shape.Rect or def.Rect,
         SliceScale = sliceScale,
+        Size = props.Size or UDim2.new(1, 0, 1, 0),
+        Position = props.Position,
+        AnchorPoint = props.AnchorPoint,
+        ZIndex = props.ZIndex or 1,
     }
-    if interactive then
+    if props.Interactive then
         defaults.AutoButtonColor = false
         defaults.Active = true
     end
-
     for key, value in pairs(props) do
         if key ~= "Parent"
             and key ~= "OutlineColor"
             and key ~= "OutlineTransparency"
             and key ~= "Interactive"
-            and key ~= "AutomaticSize" 
+            and key ~= "AutomaticSize"
+            and key ~= "PillRadius"
+            and key ~= "Radius"
+            and key ~= "ImageColor3"
+            and key ~= "ImageTransparency"
         then
             defaults[key] = value
         end
     end
 
-    
-    local parent = props.Parent
-    defaults.Parent = nil
-
-    local ok, inst = pcall(function()
-        return createInstance(className, defaults)
+    local inst = createInstance(className, defaults)
+    pcall(function()
+        inst:SetAttribute("SquircleType", outline and "PillOutline" or "Pill")
+        inst:SetAttribute("SquircleRadius", radiusPx)
     end)
-    if not ok or not inst then
-        
+
+    local function syncSlice()
+        local h = inst.AbsoluteSize.Y
+        if h <= 0 then
+            return
+        end
+        local r = tonumber(props.PillRadius) or radiusPx
+        if r < 64 then
+            r = math.max(r, h * 0.5)
+        end
+        inst.SliceScale = math.max(r / shapeRadius, 0.0001)
+    end
+    inst:GetPropertyChangedSignal("AbsoluteSize"):Connect(syncSlice)
+    task.defer(syncSlice)
+
+    if props.Parent then
+        inst.Parent = props.Parent
+    end
+    return inst
+end
+
+createSquircle = function(radius, shapeType, props, interactive)
+    props = props or {}
+    shapeType = shapeType or "Squircle"
+    if shapeType == "Pill" or shapeType == "PillOutline" then
+        props = props or {}
+        props.Radius = radius
+        props.Interactive = interactive == true
+        return createPill(props, shapeType == "PillOutline")
+    end
+    local shape = getSquircleShape(shapeType)
+    local radiusPx = resolveRadiusPx(radius)
+    local className = interactive and "ImageButton" or "ImageLabel"
+    local shapeRadius = shape.Radius or 310
+    
+
+    local sliceScale = math.max(radiusPx / shapeRadius, 0.0001)
+    local hasImage = type(shape.Image) == "string" and shape.Image ~= ""
+    local isBottomCap = type(shapeType) == "string" and string.find(shapeType, "BL-BR", 1, true) ~= nil
+
+    local parent = props.Parent
+    local inst = nil
+
+    if hasImage then
+        local defaults = {
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            Image = shape.Image,
+            ImageColor3 = props.ImageColor3 or Theme.BackgroundTertiary,
+            ImageTransparency = props.ImageTransparency or 0,
+            ScaleType = Enum.ScaleType.Slice,
+            SliceCenter = shape.Rect,
+            SliceScale = sliceScale,
+        }
+        if interactive then
+            defaults.AutoButtonColor = false
+            defaults.Active = true
+        end
+
+        for key, value in pairs(props) do
+            if key ~= "Parent"
+                and key ~= "OutlineColor"
+                and key ~= "OutlineTransparency"
+                and key ~= "Interactive"
+                and key ~= "AutomaticSize"
+            then
+                defaults[key] = value
+            end
+        end
+        defaults.Parent = nil
+
+        local ok
+        ok, inst = pcall(function()
+            return createInstance(className, defaults)
+        end)
+        if not ok then
+            inst = nil
+        end
+    end
+
+    if not inst then
         local fallbackProps = {
             BackgroundColor3 = props.ImageColor3 or Theme.BackgroundTertiary,
             BackgroundTransparency = props.ImageTransparency or 0,
@@ -279,6 +347,18 @@ createSquircle = function(radius, shapeType, props, interactive)
             ZIndex = props.ZIndex,
             Name = props.Name,
         }
+        for key, value in pairs(props) do
+            if key ~= "Parent"
+                and key ~= "OutlineColor"
+                and key ~= "OutlineTransparency"
+                and key ~= "Interactive"
+                and key ~= "AutomaticSize"
+                and key ~= "ImageColor3"
+                and key ~= "ImageTransparency"
+            then
+                fallbackProps[key] = value
+            end
+        end
         if interactive then
             fallbackProps.Text = ""
             fallbackProps.AutoButtonColor = false
@@ -293,6 +373,21 @@ createSquircle = function(radius, shapeType, props, interactive)
         inst:SetAttribute("SquircleRadius", radiusPx)
         inst:SetAttribute("SquircleType", shapeType)
     end)
+
+    if hasImage and inst and isBottomCap then
+        local function syncCapSlice()
+            local h = inst.AbsoluteSize.Y
+            if h <= 0 then
+                return
+            end
+            local scale = math.max(radiusPx / shapeRadius, 0.0001)
+            local bottomSrc = 512
+            scale = math.min(scale, (h - 1) / bottomSrc)
+            inst.SliceScale = math.max(scale, 0.0001)
+        end
+        inst:GetPropertyChangedSignal("AbsoluteSize"):Connect(syncCapSlice)
+        task.defer(syncCapSlice)
+    end
 
     if parent then
         inst.Parent = parent
@@ -589,9 +684,7 @@ local function createAssetGlyph(parent, fileName, sizePx, props)
     return icon
 end
 
--- DexPlusPlus NewDark class icons live in asset/instance/<ClassName>.png
 local DEX_NEWDARK = {
-    Image = "rbxassetid://135148380892747", -- source sheet id (tiles extracted locally)
     IconSize = 32,
     Columns = 18,
     Dir = "instance",
@@ -946,8 +1039,21 @@ local function moduleTreeArrowRotation(isExpanded)
     return isExpanded and 180 or 90
 end
 
+local function setModuleTreeArrowGlyphRotation(arrow, isExpanded)
+    if not arrow or not arrow:IsA("GuiObject") then
+        return
+    end
+    local rot = moduleTreeArrowRotation(isExpanded)
+    arrow.Rotation = 0
+    local glyph = arrow:FindFirstChild("Glyph")
+    if glyph and glyph:IsA("GuiObject") then
+        glyph.Rotation = rot
+    else
+        arrow.Rotation = rot
+    end
+end
+
 local function createModuleTreeArrow(parent, isExpanded, layout)
-    
     local host = createInstance("Frame", {
         Name = "TreeArrow",
         Size = UDim2.new(0, 8, 0, 8),
@@ -955,7 +1061,7 @@ local function createModuleTreeArrow(parent, isExpanded, layout)
         AnchorPoint = Vector2.new(0.5, 0.5),
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        Rotation = moduleTreeArrowRotation(isExpanded),
+        Rotation = 0,
         ZIndex = 2,
         Parent = parent,
     })
@@ -964,17 +1070,70 @@ local function createModuleTreeArrow(parent, isExpanded, layout)
         Position = UDim2.new(0.5, 0, 0.5, 0),
         AnchorPoint = Vector2.new(0.5, 0.5),
         ImageColor3 = Theme.TextMuted,
-        Rotation = 0,
+        Rotation = moduleTreeArrowRotation(isExpanded),
         ZIndex = 2,
     })
     return host
 end
 
 local function setModuleTreeArrowExpanded(arrow, isExpanded)
-    if not arrow or not arrow:IsA("GuiObject") then
-        return
+    setModuleTreeArrowGlyphRotation(arrow, isExpanded)
+end
+
+local function createDirectionIndicator(parent, hasIncoming, hasOutgoing, props)
+    props = props or {}
+    hasIncoming = hasIncoming == true
+    hasOutgoing = hasOutgoing == true
+    if not hasIncoming and not hasOutgoing then
+        return nil
     end
-    arrow.Rotation = moduleTreeArrowRotation(isExpanded)
+
+    local sizePx = props.SizePx or 10
+    local both = hasIncoming and hasOutgoing
+    local color = both and Theme.Purple or (hasIncoming and Theme.Cyan or Theme.Success)
+    local hostW = props.Width or (both and math.max(12, sizePx) or sizePx)
+    local hostH = props.Height
+    local host = createInstance("Frame", {
+        Name = props.Name or "DirIndicator",
+        Size = hostH and UDim2.new(0, hostW, 0, hostH) or UDim2.new(0, hostW, 1, 0),
+        Position = props.Position or UDim2.new(0, 0, 0.5, 0),
+        AnchorPoint = props.AnchorPoint or Vector2.new(0, 0.5),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ZIndex = props.ZIndex or 2,
+        Parent = parent,
+    })
+
+    if both then
+        local glyphSize = math.max(6, sizePx - 2)
+        createAssetGlyph(host, "triangle.png", glyphSize, {
+            Name = "OutgoingGlyph",
+            Position = UDim2.new(0.5, 0, 0.5, -2),
+            AnchorPoint = Vector2.new(0.5, 1),
+            ImageColor3 = color,
+            Rotation = 0,
+            ZIndex = props.ZIndex or 2,
+        })
+        createAssetGlyph(host, "triangle.png", glyphSize, {
+            Name = "IncomingGlyph",
+            Position = UDim2.new(0.5, 0, 0.5, 2),
+            AnchorPoint = Vector2.new(0.5, 0),
+            ImageColor3 = color,
+            Rotation = 180,
+            ZIndex = props.ZIndex or 2,
+        })
+    else
+        createAssetGlyph(host, "triangle.png", sizePx, {
+            Name = "DirGlyph",
+            Position = UDim2.new(0.5, 0, 0.5, 0),
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            ImageColor3 = color,
+            Rotation = hasIncoming and 180 or 0,
+            ZIndex = props.ZIndex or 2,
+        })
+    end
+
+    return host, color
 end
 
 local function createTypeIcon(parent, typeName, sizePx, position)
