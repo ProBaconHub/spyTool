@@ -5349,6 +5349,93 @@ function RemoteSpyUI:CreateSettingsTab()
         LayoutOrder = 2,
         Parent = aboutCard
     })
+
+    local function isBootstrapDevMode()
+        local env = (getgenv and getgenv()) or nil
+        if type(env) ~= "table" then
+            return false
+        end
+        local boot = env.__SpyToolBootstrap
+        if type(boot) == "table" then
+            if boot.DevMode == true then
+                return true
+            end
+            if type(boot.IsDevMode) == "function" then
+                local ok, result = pcall(boot.IsDevMode)
+                if ok and result then
+                    return true
+                end
+            end
+        end
+        if type(isfile) == "function" then
+            if isfile("spyTool/.dev") or isfile(".dev") then
+                return true
+            end
+        end
+        return env.__SpyToolLocalDevActive == true or env.__SpyToolDevSkipSync == true
+    end
+
+    if isBootstrapDevMode() then
+        local devCard = createPanel(Theme.Radius.Medium, {
+            Size = UDim2.new(1, 0, 0, 0),
+            AutomaticSize = Enum.AutomaticSize.Y,
+            ImageColor3 = Theme.BackgroundSecondary,
+            LayoutOrder = 4,
+            Parent = scroll,
+        }, true)
+        createPadding(devCard, 14)
+        createListLayout(devCard, 8)
+
+        createInstance("TextLabel", {
+            Size = UDim2.new(1, 0, 0, 20),
+            BackgroundTransparency = 1,
+            Text = "Developer",
+            TextColor3 = Theme.TextPrimary,
+            TextSize = 13,
+            Font = Theme.FontFamilyBold,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            LayoutOrder = 1,
+            Parent = devCard,
+        })
+
+        createInstance("TextLabel", {
+            Size = UDim2.new(1, 0, 0, 0),
+            AutomaticSize = Enum.AutomaticSize.Y,
+            BackgroundTransparency = 1,
+            Text = "Dev mode is active (spyTool/.dev). Local files are used and GitHub sync is skipped.",
+            TextColor3 = Theme.TextSecondary,
+            TextSize = 11,
+            Font = Theme.FontFamily,
+            TextWrapped = true,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            LayoutOrder = 2,
+            Parent = devCard,
+        })
+
+        local fetchRow = createInstance("Frame", {
+            Size = UDim2.new(1, 0, 0, 34),
+            BackgroundTransparency = 1,
+            LayoutOrder = 3,
+            Parent = devCard,
+        })
+
+        UIComponents.Button(fetchRow, "Fetch public version", "primary", function()
+            local env = (getgenv and getgenv()) or nil
+            local boot = env and env.__SpyToolBootstrap
+            local fetchFn = boot and boot.FetchPublicVersion
+            if type(fetchFn) ~= "function" then
+                UIComponents.Notification(self.ScreenGui, "Bootstrap API unavailable", "error")
+                return
+            end
+            UIComponents.Notification(self.ScreenGui, "Fetching public release…", "info")
+            task.defer(function()
+                local ok, err = pcall(fetchFn)
+                if not ok then
+                    warn("[SpyTool] Fetch public version failed: " .. tostring(err))
+                end
+            end)
+        end)
+    end
     
     self.SettingsTab = tab
 end

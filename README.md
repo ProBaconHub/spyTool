@@ -32,6 +32,26 @@ What happens:
 
 Offline / already installed: if sync fails but `spyTool/main.lua` exists locally, the bootstrap still boots from disk.
 
+## Local debug (skip GitHub sync)
+
+Keep using the **same** public entry line:
+
+```lua
+loadstring(game:HttpGet("https://raw.githubusercontent.com/ProBaconHub/spyTool/refs/heads/main/spyTool.lua?t=" .. tostring(tick()), true))()
+```
+
+1. Put the full project in your executor workspace as `spyTool/` (including `installer/` + local `spyTool.lua`)
+2. Create `spyTool/.dev` (gitignored)
+
+The public bootstrap sees `.dev` and re-executes `spyTool/spyTool.lua` from workspace (no sync).  
+Settings → **Developer** → **Fetch public version** deletes `.dev`, pulls the public release, and reloads.
+
+Optional:
+
+```lua
+getgenv().__SpyToolDevForceInstaller = true -- show installer even if already installed
+```
+
 ## Layout
 
 ```text

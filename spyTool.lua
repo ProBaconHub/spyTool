@@ -1,8 +1,10 @@
 --[[
     Spy Tool bootstrap
 
-    Run in-game (cache-busted entry URL):
+    Run in-game:
       loadstring(game:HttpGet("https://raw.githubusercontent.com/ProBaconHub/spyTool/refs/heads/main/spyTool.lua?t=" .. tostring(tick()), true))()
+
+    To skip GitHub sync, set getgenv().__SpyToolDevSkipSync = true
 ]]
 
 local REPO_OWNER = "ProBaconHub"
@@ -18,14 +20,101 @@ local RAW_BASE = string.format(
 local WORKSPACE_FOLDER = "spyTool"
 local MANIFEST_REL = "manifest.json"
 local MAIN_REL = "main.lua"
+local BOOTSTRAP_REL = "spyTool.lua"
 local INSTALLER_UI_REL = "installer/ui.lua"
 local INSTALLER_SPINNER_REL = "installer/asset/spinner.png"
 local INSTALLER_TMP_DIR = "__SpyToolInstallerTmp"
+local DEV_MARKER_REL = ".dev"
+local DEV_GENV_SKIP_SYNC = "__SpyToolDevSkipSync"
+local DEV_GENV_FORCE_INSTALLER = "__SpyToolDevForceInstaller"
+local DEV_HANDOFF_KEY = "__SpyToolLocalDevActive"
+local DEV_BOOTSTRAP_KEY = "__SpyToolBootstrap"
+local SPYTOOL_GENV_KEY = "__ProBaconHubSpyTool__"
 
 local _httpBustSeq = 0
 
 local function log(msg)
     print("[SpyTool] " .. tostring(msg))
+end
+
+local function getDevGenv()
+    if type(getgenv) ~= "function" then
+        return nil
+    end
+    local ok, env = pcall(getgenv)
+    if ok and type(env) == "table" then
+        return env
+    end
+    return nil
+end
+
+local function hasDevMarkerFile()
+    if type(isfile) ~= "function" then
+        return false
+    end
+    return isfile(WORKSPACE_FOLDER .. "/" .. DEV_MARKER_REL) or isfile(DEV_MARKER_REL)
+end
+
+local function isDevSkipSync()
+    local env = getDevGenv()
+    if env and env[DEV_GENV_SKIP_SYNC] then
+        return true
+    end
+    if env and env[DEV_HANDOFF_KEY] then
+        return true
+    end
+    return hasDevMarkerFile()
+end
+
+local function isDevForceInstaller()
+    local env = getDevGenv()
+    return env ~= nil and env[DEV_GENV_FORCE_INSTALLER] == true
+end
+
+local function resolveLocalBootstrapPath()
+    if type(isfile) ~= "function" then
+        return nil
+    end
+    local primary = WORKSPACE_FOLDER .. "/" .. BOOTSTRAP_REL
+    if isfile(primary) then
+        return primary
+    end
+    if isfile(BOOTSTRAP_REL) then
+        return BOOTSTRAP_REL
+    end
+    return nil
+end
+
+-- Public HttpGet bootstrap → local workspace bootstrap when .dev is present.
+do
+    local env = getDevGenv()
+    local alreadyLocal = env and env[DEV_HANDOFF_KEY] == true
+    if not alreadyLocal and hasDevMarkerFile() then
+        local localPath = resolveLocalBootstrapPath()
+        if localPath and type(readfile) == "function" then
+            if env then
+                env[DEV_HANDOFF_KEY] = true
+                env[DEV_GENV_SKIP_SYNC] = true
+            end
+            log("dev mode: handing off to local " .. localPath)
+            local okRead, source = pcall(readfile, localPath)
+            if not okRead or type(source) ~= "string" or source == "" then
+                if env then
+                    env[DEV_HANDOFF_KEY] = nil
+                end
+                error("[SpyTool] failed to read local bootstrap: " .. tostring(source))
+            end
+            local chunk, compileErr = loadstring(source, "@" .. localPath)
+            if not chunk then
+                if env then
+                    env[DEV_HANDOFF_KEY] = nil
+                end
+                error("[SpyTool] failed to compile local bootstrap: " .. tostring(compileErr))
+            end
+            return chunk()
+        end
+        log("dev marker found but local spyTool.lua missing; continuing with remote bootstrap")
+    end
 end
 
 local function withCacheBust(url)
@@ -252,9 +341,38 @@ local function resolveCustomAsset(path)
     return nil
 end
 
-local function loadInstallerUi()
-    local source = httpGet(rawUrl(INSTALLER_UI_REL))
-    local chunk, err = loadstring(source, "@installer/ui.lua")
+local function resolveLocalInstallerPath(rel)
+    local candidates = {
+        workspacePath(rel),
+        rel,
+    }
+    for _, path in ipairs(candidates) do
+        if type(isfile) == "function" and isfile(path) then
+            return path
+        end
+    end
+    return nil
+end
+
+local function loadInstallerUi(preferLocal)
+    local source = nil
+    local sourceLabel = INSTALLER_UI_REL
+
+    if preferLocal then
+        local localUi = resolveLocalInstallerPath(INSTALLER_UI_REL)
+        if localUi then
+            source = readLocal(localUi)
+            sourceLabel = localUi
+            log("dev mode: loading installer from " .. localUi)
+        end
+    end
+
+    if type(source) ~= "string" or source == "" then
+        source = httpGet(rawUrl(INSTALLER_UI_REL))
+        sourceLabel = "remote:" .. INSTALLER_UI_REL
+    end
+
+    local chunk, err = loadstring(source, "@" .. sourceLabel)
     if not chunk then
         error("[SpyTool] failed to compile installer UI: " .. tostring(err))
     end
@@ -264,18 +382,30 @@ local function loadInstallerUi()
     end
 
     local spinnerImage = ""
+    local trackedTemp = false
     local tmpSpinnerPath = joinPath(INSTALLER_TMP_DIR, "spinner.png")
-    local okFetch, spinnerBody = pcall(httpGet, rawUrl(INSTALLER_SPINNER_REL))
-    if okFetch and type(spinnerBody) == "string" and #spinnerBody > 0 and type(writefile) == "function" then
-        ensureFolder(INSTALLER_TMP_DIR)
-        local okWrite = pcall(writefile, tmpSpinnerPath, spinnerBody)
-        if okWrite then
-            spinnerImage = resolveCustomAsset(tmpSpinnerPath) or ""
+
+    if preferLocal then
+        local localSpinner = resolveLocalInstallerPath(INSTALLER_SPINNER_REL)
+        if localSpinner then
+            spinnerImage = resolveCustomAsset(localSpinner) or ""
+        end
+    end
+
+    if spinnerImage == "" then
+        local okFetch, spinnerBody = pcall(httpGet, rawUrl(INSTALLER_SPINNER_REL))
+        if okFetch and type(spinnerBody) == "string" and #spinnerBody > 0 and type(writefile) == "function" then
+            ensureFolder(INSTALLER_TMP_DIR)
+            local okWrite = pcall(writefile, tmpSpinnerPath, spinnerBody)
+            if okWrite then
+                spinnerImage = resolveCustomAsset(tmpSpinnerPath) or ""
+                trackedTemp = spinnerImage ~= ""
+            end
         end
     end
 
     local ui = InstallerUI.new({ spinnerImage = spinnerImage })
-    if spinnerImage ~= "" then
+    if trackedTemp then
         ui:TrackTemp(tmpSpinnerPath, false)
         ui:TrackTemp(INSTALLER_TMP_DIR, true)
     end
@@ -385,10 +515,70 @@ local function loadMain()
     return chunk()
 end
 
+local function clearDevMarkers()
+    if type(delfile) == "function" then
+        pcall(delfile, WORKSPACE_FOLDER .. "/" .. DEV_MARKER_REL)
+        pcall(delfile, DEV_MARKER_REL)
+    end
+    local env = getDevGenv()
+    if env then
+        env[DEV_HANDOFF_KEY] = nil
+        env[DEV_GENV_SKIP_SYNC] = nil
+        env[DEV_GENV_FORCE_INSTALLER] = nil
+    end
+end
+
+local function fetchPublicVersionAndReload()
+    log("fetching public release and reloading…")
+    clearDevMarkers()
+
+    local env = getDevGenv()
+    if env then
+        local tool = env[SPYTOOL_GENV_KEY]
+        if type(tool) == "table" and type(tool.Destroy) == "function" then
+            pcall(function()
+                tool.Destroy({ defer = false, force = true })
+            end)
+        end
+        env[SPYTOOL_GENV_KEY] = nil
+    end
+
+    local source = httpGet(RAW_BASE .. "/" .. BOOTSTRAP_REL)
+    local chunk, compileErr = loadstring(source, "@" .. BOOTSTRAP_REL .. "#public")
+    if not chunk then
+        error("[SpyTool] failed to compile public bootstrap: " .. tostring(compileErr))
+    end
+    return chunk()
+end
+
+local function registerBootstrapApi(devMode)
+    local env = getDevGenv()
+    if not env then
+        return
+    end
+    env[DEV_BOOTSTRAP_KEY] = {
+        IsDev = function()
+            return hasDevMarkerFile() or env[DEV_HANDOFF_KEY] == true or env[DEV_GENV_SKIP_SYNC] == true
+        end,
+        IsDevMode = function()
+            return hasDevMarkerFile() or env[DEV_HANDOFF_KEY] == true or env[DEV_GENV_SKIP_SYNC] == true
+        end,
+        FetchPublicVersion = fetchPublicVersionAndReload,
+        DevMode = devMode == true,
+    }
+end
+
+local devSkipSync = isDevSkipSync()
+local forceInstaller = isDevForceInstaller()
+registerBootstrapApi(devSkipSync)
+if devSkipSync then
+    log("dev mode active — GitHub sync disabled")
+end
+
 local installerUi = nil
-local firstRun = isFirstInstall()
-if firstRun then
-    local uiOk, uiOrErr = pcall(loadInstallerUi)
+local showInstaller = isFirstInstall() or (devSkipSync and forceInstaller)
+if showInstaller then
+    local uiOk, uiOrErr = pcall(loadInstallerUi, devSkipSync)
     if uiOk then
         installerUi = uiOrErr
         local accepted = false
@@ -411,14 +601,24 @@ if firstRun then
         pcall(function()
             installerUi:ShowProgress()
         end)
+        if devSkipSync then
+            installerUi:SetStatus("Dev mode — using local files")
+            installerUi:SetProgress(1, 1)
+            task.wait(0.35)
+        end
     else
         log("installer UI unavailable: " .. tostring(uiOrErr))
     end
 end
 
-local syncOk, syncErr = pcall(function()
-    return syncFromGitHub(installerUi)
-end)
+local syncOk, syncErr = true, nil
+if devSkipSync then
+    log("dev mode: skipping syncFromGitHub")
+else
+    syncOk, syncErr = pcall(function()
+        return syncFromGitHub(installerUi)
+    end)
+end
 
 if installerUi then
     pcall(function()

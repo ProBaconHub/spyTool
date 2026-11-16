@@ -1,0 +1,8 @@
+# Local debug marker — enables skip-sync in spyTool.lua (never commit)
+.dev
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*~
