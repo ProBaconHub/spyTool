@@ -180,22 +180,41 @@ function InstallerUI.new(opts)
     prompt.Text = "Please read the following usage agreement:"
     prompt.Parent = agreementPage
 
-    local agreementBox = Instance.new("Frame")
-    agreementBox.Name = "AgreementBox"
-    agreementBox.Position = UDim2.fromOffset(24, 74)
-    agreementBox.Size = UDim2.new(1, -48, 0, AGREEMENT_BOX_HEIGHT)
-    agreementBox.BackgroundColor3 = AGREEMENT_BG
-    agreementBox.BorderSizePixel = 0
-    agreementBox.ClipsDescendants = true
-    agreementBox.Parent = agreementPage
-    applyCorner(agreementBox, 8)
-    applyStroke(agreementBox, BORDER, 1)
+    -- CanvasGroup clips
+    local agreementBox
+    do
+        local ok, group = pcall(function()
+            local g = Instance.new("CanvasGroup")
+            g.Name = "AgreementBox"
+            g.Position = UDim2.fromOffset(24, 74)
+            g.Size = UDim2.new(1, -48, 0, AGREEMENT_BOX_HEIGHT)
+            g.BackgroundColor3 = AGREEMENT_BG
+            g.BorderSizePixel = 0
+            g.Parent = agreementPage
+            applyCorner(g, 8)
+            applyStroke(g, BORDER, 1)
+            return g
+        end)
+        if ok and group then
+            agreementBox = group
+        else
+            agreementBox = Instance.new("Frame")
+            agreementBox.Name = "AgreementBox"
+            agreementBox.Position = UDim2.fromOffset(24, 74)
+            agreementBox.Size = UDim2.new(1, -48, 0, AGREEMENT_BOX_HEIGHT)
+            agreementBox.BackgroundColor3 = AGREEMENT_BG
+            agreementBox.BorderSizePixel = 0
+            agreementBox.ClipsDescendants = true
+            agreementBox.Parent = agreementPage
+            applyCorner(agreementBox, 8)
+            applyStroke(agreementBox, BORDER, 1)
+        end
+    end
 
     local scroll = Instance.new("ScrollingFrame")
     scroll.Name = "AgreementScroll"
     scroll.Size = UDim2.fromScale(1, 1)
-    scroll.BackgroundColor3 = AGREEMENT_BG
-    scroll.BackgroundTransparency = 0
+    scroll.BackgroundTransparency = 1
     scroll.BorderSizePixel = 0
     scroll.ScrollBarThickness = 5
     scroll.ScrollBarImageColor3 = Color3.fromRGB(82, 82, 91)
@@ -339,12 +358,6 @@ function InstallerUI.new(opts)
         checkLabel.TextTransparency = on and 0 or 0.35
         checkLabel.TextColor3 = on and TEXT or MUTED
         scrollHint.Visible = not on
-        if not on and self._agreed then
-            self._agreed = false
-            checkMark.Text = ""
-            checkBtn.BackgroundColor3 = AGREEMENT_BG
-            setInstallEnabled(false)
-        end
     end
     setCheckboxEnabled(false)
 
@@ -362,9 +375,12 @@ function InstallerUI.new(opts)
     end
 
     local function updateScrollGate()
-        local atBottom = isScrolledToBottom()
-        self._scrolledToBottom = atBottom
-        setCheckboxEnabled(atBottom)
+        if isScrolledToBottom() then
+            self._scrolledToBottom = true
+        end
+        if self._scrolledToBottom then
+            setCheckboxEnabled(true)
+        end
     end
 
     local function setAgreed(on)
@@ -455,8 +471,8 @@ function InstallerUI.new(opts)
     local spinnerHost = Instance.new("Frame")
     spinnerHost.Name = "SpinnerHost"
     spinnerHost.AnchorPoint = Vector2.new(0.5, 0)
-    spinnerHost.Position = UDim2.new(0.5, 0, 0, 120)
-    spinnerHost.Size = UDim2.fromOffset(44, 44)
+    spinnerHost.Position = UDim2.new(0.5, 0, 0, 28)
+    spinnerHost.Size = UDim2.fromOffset(40, 40)
     spinnerHost.BackgroundTransparency = 1
     spinnerHost.Parent = progressPage
 
@@ -464,7 +480,7 @@ function InstallerUI.new(opts)
     spinner.Name = "Spinner"
     spinner.AnchorPoint = Vector2.new(0.5, 0.5)
     spinner.Position = UDim2.fromScale(0.5, 0.5)
-    spinner.Size = UDim2.fromOffset(40, 40)
+    spinner.Size = UDim2.fromOffset(36, 36)
     spinner.BackgroundTransparency = 1
     spinner.Image = opts.spinnerImage or ""
     spinner.ImageColor3 = PRIMARY
@@ -478,7 +494,7 @@ function InstallerUI.new(opts)
         ring.Name = "FallbackRing"
         ring.AnchorPoint = Vector2.new(0.5, 0.5)
         ring.Position = UDim2.fromScale(0.5, 0.5)
-        ring.Size = UDim2.fromOffset(36, 36)
+        ring.Size = UDim2.fromOffset(32, 32)
         ring.BackgroundTransparency = 1
         ring.Parent = spinnerHost
         applyCorner(ring, 999)
@@ -499,11 +515,11 @@ function InstallerUI.new(opts)
     local title = Instance.new("TextLabel")
     title.Name = "Title"
     title.AnchorPoint = Vector2.new(0.5, 0)
-    title.Position = UDim2.new(0.5, 0, 0, 190)
-    title.Size = UDim2.new(1, -48, 0, 24)
+    title.Position = UDim2.new(0.5, 0, 0, 78)
+    title.Size = UDim2.new(1, -40, 0, 22)
     title.BackgroundTransparency = 1
     title.Font = Enum.Font.GothamBold
-    title.TextSize = 16
+    title.TextSize = 15
     title.TextColor3 = TEXT
     title.Text = "Installing files"
     title.Parent = progressPage
@@ -512,8 +528,8 @@ function InstallerUI.new(opts)
     local status = Instance.new("TextLabel")
     status.Name = "Status"
     status.AnchorPoint = Vector2.new(0.5, 0)
-    status.Position = UDim2.new(0.5, 0, 0, 222)
-    status.Size = UDim2.new(1, -48, 0, 18)
+    status.Position = UDim2.new(0.5, 0, 0, 102)
+    status.Size = UDim2.new(1, -40, 0, 16)
     status.BackgroundTransparency = 1
     status.Font = Enum.Font.GothamMedium
     status.TextSize = 12
@@ -523,15 +539,36 @@ function InstallerUI.new(opts)
     status.Parent = progressPage
     self.Status = status
 
-    local barBg = Instance.new("Frame")
-    barBg.Name = "BarBg"
-    barBg.AnchorPoint = Vector2.new(0.5, 0)
-    barBg.Position = UDim2.new(0.5, 0, 0, 258)
-    barBg.Size = UDim2.new(1, -96, 0, 6)
-    barBg.BackgroundColor3 = BORDER
-    barBg.BorderSizePixel = 0
-    barBg.Parent = progressPage
-    applyCorner(barBg, 99)
+    -- CanvasGroup clips
+    local barBg
+    do
+        local ok, group = pcall(function()
+            local g = Instance.new("CanvasGroup")
+            g.Name = "BarBg"
+            g.AnchorPoint = Vector2.new(0.5, 0)
+            g.Position = UDim2.new(0.5, 0, 0, 132)
+            g.Size = UDim2.new(1, -64, 0, 6)
+            g.BackgroundColor3 = BORDER
+            g.BorderSizePixel = 0
+            g.Parent = progressPage
+            applyCorner(g, 99)
+            return g
+        end)
+        if ok and group then
+            barBg = group
+        else
+            barBg = Instance.new("Frame")
+            barBg.Name = "BarBg"
+            barBg.AnchorPoint = Vector2.new(0.5, 0)
+            barBg.Position = UDim2.new(0.5, 0, 0, 132)
+            barBg.Size = UDim2.new(1, -64, 0, 6)
+            barBg.BackgroundColor3 = BORDER
+            barBg.BorderSizePixel = 0
+            barBg.ClipsDescendants = true
+            barBg.Parent = progressPage
+            applyCorner(barBg, 99)
+        end
+    end
 
     local barFill = Instance.new("Frame")
     barFill.Name = "BarFill"
@@ -539,7 +576,6 @@ function InstallerUI.new(opts)
     barFill.BackgroundColor3 = PRIMARY
     barFill.BorderSizePixel = 0
     barFill.Parent = barBg
-    applyCorner(barFill, 99)
     self.BarFill = barFill
 
     return self
@@ -560,7 +596,11 @@ function InstallerUI:ShowProgress()
         self.ProgressPage.Visible = true
     end
     if self.Card then
-        self.Card.Size = UDim2.fromOffset(360, 300)
+        TweenService:Create(
+            self.Card,
+            TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+            { Size = UDim2.fromOffset(320, 176) }
+        ):Play()
     end
     self:_startSpin()
     self:SetStatus("Installing files")

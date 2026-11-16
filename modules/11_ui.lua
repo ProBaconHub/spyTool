@@ -2204,7 +2204,7 @@ function RemoteSpyUI:CreateRequireTab()
     })
 
     local searchWrap = createInstance("Frame", {
-        Size = UDim2.new(1, -190, 1, 0),
+        Size = UDim2.new(1, -110, 1, 0),
         BackgroundTransparency = 1,
         Parent = chromePad,
     })
@@ -2223,17 +2223,6 @@ function RemoteSpyUI:CreateRequireTab()
             self:RefreshModuleList(true)
         end)
     end)
-
-    local treeWrap = createInstance("Frame", {
-        Size = UDim2.new(0, 72, 1, 0),
-        Position = UDim2.new(1, -182, 0, 0),
-        BackgroundTransparency = 1,
-        Parent = chromePad,
-    })
-    UIComponents.Checkbox(treeWrap, self.ModuleTreeView, function(state)
-        self.ModuleTreeView = state
-        self:_switchModuleListView()
-    end, "Tree")
 
     local actions = createInstance("Frame", {
         Size = UDim2.new(0, 100, 1, 0),
@@ -2325,7 +2314,7 @@ function RemoteSpyUI:CreateRequireTab()
     end)
 
     local moduleTitle = createInstance("TextLabel", {
-        Size = UDim2.new(1, -8, 0, headerH),
+        Size = UDim2.new(1, -88, 0, headerH),
         Position = UDim2.new(0, 8, 0, 0),
         BackgroundTransparency = 1,
         Text = "Modules",
@@ -2336,6 +2325,18 @@ function RemoteSpyUI:CreateRequireTab()
         ZIndex = 2,
         Parent = modulePanel
     })
+
+    local treeWrap = createInstance("Frame", {
+        Size = UDim2.new(0, 72, 0, 18),
+        Position = UDim2.new(1, -80, 0, math.floor((headerH - 16) / 2)),
+        BackgroundTransparency = 1,
+        ZIndex = 3,
+        Parent = modulePanel,
+    })
+    UIComponents.Checkbox(treeWrap, self.ModuleTreeView, function(state)
+        self.ModuleTreeView = state
+        self:_switchModuleListView()
+    end, "Tree")
 
     local moduleScroll = createInstance("ScrollingFrame", {
         Size = UDim2.new(1, 0, 1, -headerH),
