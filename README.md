@@ -14,17 +14,57 @@ In that thread, Roblox explained that creators with edit permissions may use a m
 
 Do **not** use this project against games you do not own or are not authorized to develop.
 
-## Layout / assets
+## Run (recommended)
 
-Keep this project as a folder named `spyTool` in your executor workspace:
+Always fetch the bootstrap from GitHub. It syncs your executor workspace differentially, then starts the tool:
 
-- `spyTool/spyTool.lua` — loader (run this)
-- `spyTool/main.lua` — full tool (loaded via `readfile` + `loadstring`)
-- `spyTool/asset/` — local icons via `getcustomasset` (letter fallback if unavailable)
+```lua
+loadstring(game:HttpGet("https://raw.githubusercontent.com/ProBaconHub/spyTool/refs/heads/main/spyTool.lua"))()
+```
 
-Chrome uses sliced **Squircle** image plates as the entire frame (iOS G2 continuous corners). Local plates live in `spyTool/asset/squircle/` and load via `getcustomasset` (with `rbxassetid` fallback). Selective top/bottom plates (`squircle-tl-tr.png` / `squircle-bl-br.png`) replace `UICorner` cover hacks.
+What happens:
 
-If your workspace root *is* the project folder, the loader also tries `main.lua`.
+1. Downloads fresh `spyTool.lua` (this bootstrap)
+2. Fetches remote `manifest.json` (file list + content hashes)
+3. Creates `spyTool/` in the executor workspace if missing
+4. Downloads **only** missing or changed files (modules, assets, `main.lua`, …)
+5. `readfile`s local `spyTool/main.lua`, which concatenates `modules/*` and runs the app
+
+Offline / already installed: if sync fails but `spyTool/main.lua` exists locally, the bootstrap still boots from disk.
+
+## Layout
+
+```text
+spyTool/
+  spyTool.lua              — GitHub bootstrap + differential sync
+  main.lua                 — concatenates modules/* and executes
+  manifest.json            — per-file hashes for partial updates
+  modules/                 — app source (synced to workspace)
+  asset/                   — icons + squircle plates (synced)
+  installer/               — first-run UI only (GitHub → memory, NOT synced)
+    ui.lua
+    asset/spinner.png
+  tools/                   — publisher scripts (not synced)
+    split_and_manifest.ps1
+```
+
+On first install (no local `spyTool/main.lua`), the bootstrap HttpGets `installer/ui.lua` + spinner into memory, shows **Installing files** with a spinner/progress bar while downloading, then destroys the UI and cleans any temp spinner cache outside `spyTool/`.
+
+Chrome uses sliced **Squircle** image plates as the entire frame (iOS G2 continuous corners). Local plates live in `spyTool/asset/squircle/` and load via `getcustomasset` (with `rbxassetid` fallback).
+
+Settings stay outside the sync tree at `ProBaconHub/RemoteSpySettings.json`.
+
+## Publishing updates
+
+After changing source files:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/split_and_manifest.ps1
+```
+
+That refreshes `manifest.json` hashes (`adler32pair-length`). Commit and push to `main`. Clients pick up only the files whose hashes changed on next bootstrap run.
+
+If you ever restore a single monolithic `main.lua`, the same script can re-split it into `modules/` (it detects the monolith automatically).
 
 ## Intended use
 
@@ -40,4 +80,4 @@ If your workspace root *is* the project folder, the loader also tries `main.lua`
 
 ## Disclaimer
 
-This repository is provided for legitimate development and testing of your own work. You are responsible for complying with [Roblox Terms of Use](https://en.help.roblox.com/hc/en-us/articles/115004647846), Community Standards, and applicable law.
+This repository is provided for legitimate development and testing of your own work. You are responsible for complying with [Roblox Terms of Use](https://help.roblox.com/hc/en-us/articles/115004647846), Community Standards, and applicable law.
