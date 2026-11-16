@@ -1,8 +1,8 @@
 --[[
     Spy Tool bootstrap
 
-    Run in-game:
-      loadstring(game:HttpGet("https://raw.githubusercontent.com/ProBaconHub/spyTool/refs/heads/main/spyTool.lua"))()
+    Run in-game (cache-busted entry URL):
+      loadstring(game:HttpGet("https://raw.githubusercontent.com/ProBaconHub/spyTool/refs/heads/main/spyTool.lua?t=" .. tostring(tick()), true))()
 ]]
 
 local REPO_OWNER = "ProBaconHub"
@@ -22,13 +22,72 @@ local INSTALLER_UI_REL = "installer/ui.lua"
 local INSTALLER_SPINNER_REL = "installer/asset/spinner.png"
 local INSTALLER_TMP_DIR = "__SpyToolInstallerTmp"
 
+local _httpBustSeq = 0
+
 local function log(msg)
     print("[SpyTool] " .. tostring(msg))
 end
 
+local function withCacheBust(url)
+    url = tostring(url or "")
+    _httpBustSeq = _httpBustSeq + 1
+    local bust = string.format(
+        "t=%s_%d_%d",
+        tostring(tick()):gsub("%.", ""),
+        os.clock() * 1000000,
+        _httpBustSeq
+    )
+    if url:find("?", 1, true) then
+        return url .. "&" .. bust
+    end
+    return url .. "?" .. bust
+end
+
+local function requestNoCache(requestFn, url)
+    local res = requestFn({
+        Url = url,
+        Method = "GET",
+        Headers = {
+            ["Cache-Control"] = "no-cache, no-store, must-revalidate",
+            ["Pragma"] = "no-cache",
+            ["Expires"] = "0",
+        },
+    })
+    if type(res) == "table" then
+        return res.Body or res.body
+    end
+    return res
+end
+
 local function httpGet(url)
+    url = withCacheBust(url)
     local getters = {}
+
+    -- Prefer executor request APIs with no-cache headers.
+    if type(request) == "function" then
+        getters[#getters + 1] = function()
+            return requestNoCache(request, url)
+        end
+    end
+    if type(http) == "table" and type(http.request) == "function" then
+        getters[#getters + 1] = function()
+            return requestNoCache(http.request, url)
+        end
+    end
+    if type(syn) == "table" and type(syn.request) == "function" then
+        getters[#getters + 1] = function()
+            return requestNoCache(syn.request, url)
+        end
+    end
+
+    -- Roblox HttpGet/HttpGetAsync second arg = nocache.
     if type(game) == "userdata" or type(game) == "table" then
+        getters[#getters + 1] = function()
+            return game:HttpGet(url, true)
+        end
+        getters[#getters + 1] = function()
+            return game:HttpGetAsync(url, true)
+        end
         getters[#getters + 1] = function()
             return game:HttpGet(url)
         end
@@ -38,34 +97,10 @@ local function httpGet(url)
     end
     if type(httpget) == "function" then
         getters[#getters + 1] = function()
+            return httpget(url, true)
+        end
+        getters[#getters + 1] = function()
             return httpget(url)
-        end
-    end
-    if type(request) == "function" then
-        getters[#getters + 1] = function()
-            local res = request({ Url = url, Method = "GET" })
-            if type(res) == "table" then
-                return res.Body or res.body
-            end
-            return res
-        end
-    end
-    if type(http) == "table" and type(http.request) == "function" then
-        getters[#getters + 1] = function()
-            local res = http.request({ Url = url, Method = "GET" })
-            if type(res) == "table" then
-                return res.Body or res.body
-            end
-            return res
-        end
-    end
-    if type(syn) == "table" and type(syn.request) == "function" then
-        getters[#getters + 1] = function()
-            local res = syn.request({ Url = url, Method = "GET" })
-            if type(res) == "table" then
-                return res.Body or res.body
-            end
-            return res
         end
     end
 
@@ -82,7 +117,8 @@ end
 
 local function rawUrl(relPath)
     relPath = tostring(relPath or ""):gsub("^/+", "")
-    return RAW_BASE .. "/" .. relPath .. "?t=" .. tostring(os.time())
+    -- Cache bust is applied again inside httpGet; keep a unique path query here too.
+    return withCacheBust(RAW_BASE .. "/" .. relPath)
 end
 
 local function fingerprint(content)
@@ -368,7 +404,9 @@ if firstRun then
             pcall(function()
                 installerUi:Destroy()
             end)
-            error("[SpyTool] installation cancelled by user")
+            installerUi = nil
+            log("installation cancelled by user")
+            return nil
         end
         pcall(function()
             installerUi:ShowProgress()

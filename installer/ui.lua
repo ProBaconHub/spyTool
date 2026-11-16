@@ -316,9 +316,15 @@ function InstallerUI.new(opts)
 
     local cancelBtn = makeButton(btnRow, "Cancel", BORDER, 100)
     cancelBtn.Name = "Cancel"
+    cancelBtn.ZIndex = 20
+    cancelBtn.Active = true
     local installBtn = makeButton(btnRow, "Install", PRIMARY, 110)
     installBtn.Name = "Install"
     installBtn.AutoButtonColor = false
+    installBtn.ZIndex = 20
+    installBtn.Active = true
+    footer.ZIndex = 20
+    btnRow.ZIndex = 20
 
     local function setInstallEnabled(on)
         installBtn.Active = on
@@ -410,26 +416,41 @@ function InstallerUI.new(opts)
         end
     end)
 
-    installBtn.MouseButton1Click:Connect(function()
-        if not self._agreed then
+    local function acceptInstall()
+        if not self._agreed or self._accepted or self._cancelled then
             return
         end
         self._accepted = true
-        self._decisionBindable:Fire(true)
-    end)
+        if self._decisionBindable then
+            self._decisionBindable:Fire(true)
+        end
+    end
 
-    cancelBtn.MouseButton1Click:Connect(function()
+    local function cancelInstall()
+        if self._accepted or self._cancelled then
+            return
+        end
         self._cancelled = true
-        self._decisionBindable:Fire(false)
-    end)
+        if self._decisionBindable then
+            self._decisionBindable:Fire(false)
+        end
+    end
+
+    installBtn.MouseButton1Click:Connect(acceptInstall)
+    installBtn.Activated:Connect(acceptInstall)
+    cancelBtn.MouseButton1Click:Connect(cancelInstall)
+    cancelBtn.Activated:Connect(cancelInstall)
 
     local progressPage = Instance.new("Frame")
     progressPage.Name = "ProgressPage"
     progressPage.Size = UDim2.fromScale(1, 1)
     progressPage.BackgroundTransparency = 1
     progressPage.Visible = false
+    progressPage.Active = false
+    progressPage.ZIndex = 1
     progressPage.Parent = card
     self.ProgressPage = progressPage
+    agreementPage.ZIndex = 2
 
     local spinnerHost = Instance.new("Frame")
     spinnerHost.Name = "SpinnerHost"
@@ -525,13 +546,10 @@ function InstallerUI.new(opts)
 end
 
 function InstallerUI:WaitForAccept()
-    if self._accepted then
-        return true
+    while self.Gui and self.Gui.Parent and not self._accepted and not self._cancelled do
+        task.wait()
     end
-    if self._cancelled then
-        return false
-    end
-    return self._decisionBindable.Event:Wait()
+    return self._accepted == true
 end
 
 function InstallerUI:ShowProgress()

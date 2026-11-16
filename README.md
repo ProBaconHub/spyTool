@@ -19,7 +19,7 @@ Do **not** use this project against games you do not own or are not authorized t
 Always fetch the bootstrap from GitHub. It syncs your executor workspace differentially, then starts the tool:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/ProBaconHub/spyTool/refs/heads/main/spyTool.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/ProBaconHub/spyTool/refs/heads/main/spyTool.lua?t=" .. tostring(tick()), true))()
 ```
 
 What happens:
