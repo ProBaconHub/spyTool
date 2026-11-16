@@ -355,7 +355,24 @@ if firstRun then
     local uiOk, uiOrErr = pcall(loadInstallerUi)
     if uiOk then
         installerUi = uiOrErr
-        installerUi:SetStatus("Installing files")
+        local accepted = false
+        local waitOk, waitResult = pcall(function()
+            return installerUi:WaitForAccept()
+        end)
+        if waitOk then
+            accepted = waitResult == true
+        else
+            log("installer confirmation failed: " .. tostring(waitResult))
+        end
+        if not accepted then
+            pcall(function()
+                installerUi:Destroy()
+            end)
+            error("[SpyTool] installation cancelled by user")
+        end
+        pcall(function()
+            installerUi:ShowProgress()
+        end)
     else
         log("installer UI unavailable: " .. tostring(uiOrErr))
     end
