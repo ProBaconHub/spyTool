@@ -4,17 +4,22 @@
 ]]
 
 local TweenService = game:GetService("TweenService")
+local TextService = game:GetService("TextService")
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
 
 local BG = Color3.fromRGB(9, 9, 11)
 local PANEL = Color3.fromRGB(24, 24, 27)
-local PANEL_INSET = Color3.fromRGB(18, 18, 21)
+local AGREEMENT_BG = Color3.fromRGB(0, 0, 0)
 local BORDER = Color3.fromRGB(39, 39, 42)
 local TEXT = Color3.fromRGB(250, 250, 250)
 local MUTED = Color3.fromRGB(161, 161, 170)
 local PRIMARY = Color3.fromRGB(59, 130, 246)
 local PRIMARY_HOVER = Color3.fromRGB(37, 99, 235)
+
+local AGREEMENT_BOX_HEIGHT = 160
+local AGREEMENT_PAD = 12
+local SCROLL_BOTTOM_SLACK = 8
 
 local AGREEMENT_TEXT = [[Usage Agreement & Responsibility
 
@@ -107,6 +112,7 @@ function InstallerUI.new(opts)
     self._cancelled = false
     self._decisionBindable = Instance.new("BindableEvent")
     self._agreed = false
+    self._scrolledToBottom = false
 
     local parent = resolveParent()
     local gui = Instance.new("ScreenGui")
@@ -135,7 +141,7 @@ function InstallerUI.new(opts)
     card.Name = "Card"
     card.AnchorPoint = Vector2.new(0.5, 0.5)
     card.Position = UDim2.fromScale(0.5, 0.5)
-    card.Size = UDim2.fromOffset(480, 460)
+    card.Size = UDim2.fromOffset(480, 380)
     card.BackgroundColor3 = PANEL
     card.BorderSizePixel = 0
     card.Parent = dim
@@ -143,7 +149,6 @@ function InstallerUI.new(opts)
     applyStroke(card, BORDER, 1)
     self.Card = card
 
-    -- Agreement page
     local agreementPage = Instance.new("Frame")
     agreementPage.Name = "AgreementPage"
     agreementPage.Size = UDim2.fromScale(1, 1)
@@ -178,8 +183,8 @@ function InstallerUI.new(opts)
     local agreementBox = Instance.new("Frame")
     agreementBox.Name = "AgreementBox"
     agreementBox.Position = UDim2.fromOffset(24, 74)
-    agreementBox.Size = UDim2.new(1, -48, 0, 250)
-    agreementBox.BackgroundColor3 = PANEL_INSET
+    agreementBox.Size = UDim2.new(1, -48, 0, AGREEMENT_BOX_HEIGHT)
+    agreementBox.BackgroundColor3 = AGREEMENT_BG
     agreementBox.BorderSizePixel = 0
     agreementBox.ClipsDescendants = true
     agreementBox.Parent = agreementPage
@@ -189,25 +194,22 @@ function InstallerUI.new(opts)
     local scroll = Instance.new("ScrollingFrame")
     scroll.Name = "AgreementScroll"
     scroll.Size = UDim2.fromScale(1, 1)
-    scroll.BackgroundTransparency = 1
+    scroll.BackgroundColor3 = AGREEMENT_BG
+    scroll.BackgroundTransparency = 0
     scroll.BorderSizePixel = 0
-    scroll.ScrollBarThickness = 4
-    scroll.ScrollBarImageColor3 = BORDER
+    scroll.ScrollBarThickness = 5
+    scroll.ScrollBarImageColor3 = Color3.fromRGB(82, 82, 91)
+    scroll.ScrollingDirection = Enum.ScrollingDirection.Y
+    scroll.ElasticBehavior = Enum.ElasticBehavior.Never
     scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-    scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    scroll.AutomaticCanvasSize = Enum.AutomaticSize.None
     scroll.Parent = agreementBox
 
-    local pad = Instance.new("UIPadding")
-    pad.PaddingTop = UDim.new(0, 12)
-    pad.PaddingBottom = UDim.new(0, 12)
-    pad.PaddingLeft = UDim.new(0, 12)
-    pad.PaddingRight = UDim.new(0, 12)
-    pad.Parent = scroll
-
+    local agreementText = opts.agreementText or AGREEMENT_TEXT
     local agreementLabel = Instance.new("TextLabel")
     agreementLabel.Name = "AgreementText"
-    agreementLabel.Size = UDim2.new(1, 0, 0, 0)
-    agreementLabel.AutomaticSize = Enum.AutomaticSize.Y
+    agreementLabel.Position = UDim2.fromOffset(AGREEMENT_PAD, AGREEMENT_PAD)
+    agreementLabel.Size = UDim2.new(1, -(AGREEMENT_PAD * 2 + 6), 0, 0)
     agreementLabel.BackgroundTransparency = 1
     agreementLabel.Font = Enum.Font.Gotham
     agreementLabel.TextSize = 12
@@ -215,13 +217,28 @@ function InstallerUI.new(opts)
     agreementLabel.TextXAlignment = Enum.TextXAlignment.Left
     agreementLabel.TextYAlignment = Enum.TextYAlignment.Top
     agreementLabel.TextWrapped = true
-    agreementLabel.Text = opts.agreementText or AGREEMENT_TEXT
+    agreementLabel.RichText = false
+    agreementLabel.Text = agreementText
     agreementLabel.Parent = scroll
 
+    local function refreshAgreementCanvas()
+        local width = math.max(1, scroll.AbsoluteSize.X - (AGREEMENT_PAD * 2 + 6))
+        local bounds = TextService:GetTextSize(
+            agreementText,
+            12,
+            Enum.Font.Gotham,
+            Vector2.new(width, 100000)
+        )
+        local textHeight = math.max(bounds.Y, 1)
+        agreementLabel.Size = UDim2.new(1, -(AGREEMENT_PAD * 2 + 6), 0, textHeight)
+        scroll.CanvasSize = UDim2.new(0, 0, 0, textHeight + AGREEMENT_PAD * 2)
+    end
+
+    local checkRowY = 74 + AGREEMENT_BOX_HEIGHT + 14
     local checkRow = Instance.new("Frame")
     checkRow.Name = "CheckRow"
-    checkRow.Position = UDim2.fromOffset(24, 338)
-    checkRow.Size = UDim2.new(1, -48, 0, 28)
+    checkRow.Position = UDim2.fromOffset(24, checkRowY)
+    checkRow.Size = UDim2.new(1, -48, 0, 40)
     checkRow.BackgroundTransparency = 1
     checkRow.Parent = agreementPage
 
@@ -229,10 +246,11 @@ function InstallerUI.new(opts)
     checkBtn.Name = "Checkbox"
     checkBtn.AutoButtonColor = false
     checkBtn.Size = UDim2.fromOffset(18, 18)
-    checkBtn.Position = UDim2.fromOffset(0, 5)
-    checkBtn.BackgroundColor3 = PANEL_INSET
+    checkBtn.Position = UDim2.fromOffset(0, 2)
+    checkBtn.BackgroundColor3 = AGREEMENT_BG
     checkBtn.BorderSizePixel = 0
     checkBtn.Text = ""
+    checkBtn.Active = false
     checkBtn.Parent = checkRow
     applyCorner(checkBtn, 4)
     applyStroke(checkBtn, BORDER, 1)
@@ -251,15 +269,29 @@ function InstallerUI.new(opts)
     checkLabel.Name = "CheckLabel"
     checkLabel.AutoButtonColor = false
     checkLabel.Position = UDim2.fromOffset(26, 0)
-    checkLabel.Size = UDim2.new(1, -26, 1, 0)
+    checkLabel.Size = UDim2.new(1, -26, 0, 20)
     checkLabel.BackgroundTransparency = 1
     checkLabel.Font = Enum.Font.GothamMedium
     checkLabel.TextSize = 12
-    checkLabel.TextColor3 = TEXT
+    checkLabel.TextColor3 = MUTED
+    checkLabel.TextTransparency = 0.35
     checkLabel.TextXAlignment = Enum.TextXAlignment.Left
     checkLabel.TextWrapped = true
+    checkLabel.Active = false
     checkLabel.Text = "I understand and agree to the usage agreement and my responsibilities."
     checkLabel.Parent = checkRow
+
+    local scrollHint = Instance.new("TextLabel")
+    scrollHint.Name = "ScrollHint"
+    scrollHint.Position = UDim2.fromOffset(26, 20)
+    scrollHint.Size = UDim2.new(1, -26, 0, 16)
+    scrollHint.BackgroundTransparency = 1
+    scrollHint.Font = Enum.Font.Gotham
+    scrollHint.TextSize = 11
+    scrollHint.TextColor3 = MUTED
+    scrollHint.TextXAlignment = Enum.TextXAlignment.Left
+    scrollHint.Text = "Scroll to the bottom of the agreement to continue."
+    scrollHint.Parent = checkRow
 
     local footer = Instance.new("Frame")
     footer.Name = "Footer"
@@ -295,19 +327,77 @@ function InstallerUI.new(opts)
     end
     setInstallEnabled(false)
 
+    local function setCheckboxEnabled(on)
+        checkBtn.Active = on
+        checkLabel.Active = on
+        checkLabel.TextTransparency = on and 0 or 0.35
+        checkLabel.TextColor3 = on and TEXT or MUTED
+        scrollHint.Visible = not on
+        if not on and self._agreed then
+            self._agreed = false
+            checkMark.Text = ""
+            checkBtn.BackgroundColor3 = AGREEMENT_BG
+            setInstallEnabled(false)
+        end
+    end
+    setCheckboxEnabled(false)
+
+    local function isScrolledToBottom()
+        local canvasY = scroll.CanvasSize.Y.Offset
+        local viewY = scroll.AbsoluteWindowSize.Y
+        if viewY <= 0 then
+            viewY = scroll.AbsoluteSize.Y
+        end
+        if canvasY <= viewY + SCROLL_BOTTOM_SLACK then
+            return true
+        end
+        local maxScroll = math.max(0, canvasY - viewY)
+        return scroll.CanvasPosition.Y >= (maxScroll - SCROLL_BOTTOM_SLACK)
+    end
+
+    local function updateScrollGate()
+        local atBottom = isScrolledToBottom()
+        self._scrolledToBottom = atBottom
+        setCheckboxEnabled(atBottom)
+    end
+
     local function setAgreed(on)
+        if on and not self._scrolledToBottom then
+            return
+        end
         self._agreed = on
         checkMark.Text = on and "✓" or ""
-        checkBtn.BackgroundColor3 = on and PRIMARY or PANEL_INSET
+        checkBtn.BackgroundColor3 = on and PRIMARY or AGREEMENT_BG
         setInstallEnabled(on)
     end
 
     local function toggleAgreed()
+        if not self._scrolledToBottom then
+            return
+        end
         setAgreed(not self._agreed)
     end
 
     checkBtn.MouseButton1Click:Connect(toggleAgreed)
     checkLabel.MouseButton1Click:Connect(toggleAgreed)
+
+    scroll:GetPropertyChangedSignal("CanvasPosition"):Connect(updateScrollGate)
+    scroll:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+        refreshAgreementCanvas()
+        updateScrollGate()
+    end)
+    scroll:GetPropertyChangedSignal("CanvasSize"):Connect(updateScrollGate)
+
+    task.defer(function()
+        refreshAgreementCanvas()
+        updateScrollGate()
+    end)
+    task.delay(0.05, function()
+        if self.Gui then
+            refreshAgreementCanvas()
+            updateScrollGate()
+        end
+    end)
 
     installBtn.MouseEnter:Connect(function()
         if self._agreed then
@@ -333,7 +423,6 @@ function InstallerUI.new(opts)
         self._decisionBindable:Fire(false)
     end)
 
-    -- Progress page (hidden until accepted)
     local progressPage = Instance.new("Frame")
     progressPage.Name = "ProgressPage"
     progressPage.Size = UDim2.fromScale(1, 1)
