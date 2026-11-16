@@ -417,17 +417,11 @@ local function fetchRemoteManifest()
     return data, body
 end
 
-local function syncFromGitHub(installerUi)
-    if type(writefile) ~= "function" or type(readfile) ~= "function" then
-        log("filesystem APIs missing; skipping sync (expecting preinstalled files)")
-        return false
-    end
-
-    ensureFolder(WORKSPACE_FOLDER)
-
-    local remoteManifest, remoteBody = fetchRemoteManifest()
-
+local function collectPendingUpdates(remoteManifest)
     local pending = {}
+    if type(remoteManifest) ~= "table" or type(remoteManifest.files) ~= "table" then
+        return pending
+    end
     for _, entry in ipairs(remoteManifest.files) do
         if type(entry) == "table" and type(entry.path) == "string" and type(entry.hash) == "string" then
             local dest = workspacePath(entry.path)
@@ -437,20 +431,58 @@ local function syncFromGitHub(installerUi)
             end
         end
     end
+    return pending
+end
+
+local function reportProgress(progressUi, done, total, fileName, statusText)
+    if not progressUi then
+        return
+    end
+    if statusText and type(progressUi.SetStatus) == "function" then
+        progressUi:SetStatus(statusText)
+    end
+    if type(progressUi.SetProgress) == "function" then
+        progressUi:SetProgress(done, total, fileName)
+    elseif type(progressUi.onProgress) == "function" then
+        progressUi.onProgress(done, total, fileName)
+    end
+    if fileName and type(progressUi.SetDetail) == "function" then
+        progressUi:SetDetail(fileName)
+    elseif fileName and type(progressUi.onFile) == "function" then
+        progressUi.onFile(fileName)
+    end
+end
+
+local function syncFromGitHub(progressUi)
+    if type(writefile) ~= "function" or type(readfile) ~= "function" then
+        log("filesystem APIs missing; skipping sync (expecting preinstalled files)")
+        return false, { updated = 0, skipped = 0, failed = 0, pending = 0 }
+    end
+
+    ensureFolder(WORKSPACE_FOLDER)
+
+    reportProgress(progressUi, 0, 1, nil, "Fetching manifest…")
+    local remoteManifest, remoteBody = fetchRemoteManifest()
+    local pending = collectPendingUpdates(remoteManifest)
 
     local totalPending = #pending
     local updated = 0
     local failed = 0
     local skipped = #remoteManifest.files - totalPending
 
-    if installerUi then
-        installerUi:SetStatus("Installing files")
-        installerUi:SetProgress(0, math.max(totalPending, 1))
+    if totalPending == 0 then
+        pcall(writeFile, workspacePath(MANIFEST_REL), remoteBody)
+        reportProgress(progressUi, 1, 1, nil, "Already up to date")
+        log("sync complete: 0 updated, " .. tostring(skipped) .. " unchanged, 0 failed")
+        return true, { updated = 0, skipped = skipped, failed = 0, pending = 0 }
     end
+
+    reportProgress(progressUi, 0, totalPending, nil, "Updating files…")
 
     for i, entry in ipairs(pending) do
         local rel = entry.path
         local dest = workspacePath(rel)
+        reportProgress(progressUi, i - 1, totalPending, rel, nil)
         local ok, bodyOrErr = pcall(httpGet, rawUrl(rel))
         if ok and type(bodyOrErr) == "string" then
             local body = bodyOrErr
@@ -470,23 +502,20 @@ local function syncFromGitHub(installerUi)
             log("failed to download " .. rel .. ": " .. tostring(bodyOrErr))
         end
 
-        if installerUi then
-            installerUi:SetProgress(i, totalPending)
-        end
+        reportProgress(progressUi, i, totalPending, rel, nil)
     end
 
     pcall(writeFile, workspacePath(MANIFEST_REL), remoteBody)
 
-    if installerUi and totalPending > 0 then
-        installerUi:SetStatus("Finishing…")
-        installerUi:SetProgress(totalPending, totalPending)
+    if totalPending > 0 then
+        reportProgress(progressUi, totalPending, totalPending, nil, "Finishing…")
     end
 
     log(string.format("sync complete: %d updated, %d unchanged, %d failed", updated, skipped, failed))
     if failed > 0 and updated == 0 and skipped == 0 then
         error("[SpyTool] sync failed for all files")
     end
-    return true
+    return true, { updated = updated, skipped = skipped, failed = failed, pending = totalPending }
 end
 
 local function loadMain()
@@ -524,27 +553,34 @@ local function clearDevMarkers()
     end
 end
 
-local function fetchPublicVersionAndReload()
-    log("fetching public release and reloading…")
-    clearDevMarkers()
-
+local function destroyRunningTool()
     local env = getDevGenv()
-    if env then
-        local tool = env[SPYTOOL_GENV_KEY]
-        if type(tool) == "table" and type(tool.Destroy) == "function" then
-            pcall(function()
-                tool.Destroy({ defer = false, force = true })
-            end)
-        end
-        env[SPYTOOL_GENV_KEY] = nil
+    if not env then
+        return
     end
+    local tool = env[SPYTOOL_GENV_KEY]
+    if type(tool) == "table" and type(tool.Destroy) == "function" then
+        pcall(function()
+            tool.Destroy({ defer = false, force = true })
+        end)
+    end
+    env[SPYTOOL_GENV_KEY] = nil
+end
 
+local function reloadPublicBootstrap()
     local source = httpGet(RAW_BASE .. "/" .. BOOTSTRAP_REL)
     local chunk, compileErr = loadstring(source, "@" .. BOOTSTRAP_REL .. "#public")
     if not chunk then
         error("[SpyTool] failed to compile public bootstrap: " .. tostring(compileErr))
     end
     return chunk()
+end
+
+local function fetchPublicVersionAndReload()
+    log("fetching public release and reloading…")
+    clearDevMarkers()
+    destroyRunningTool()
+    return reloadPublicBootstrap()
 end
 
 local function registerBootstrapApi(devMode)
@@ -560,6 +596,36 @@ local function registerBootstrapApi(devMode)
             return hasDevMarkerFile() or env[DEV_HANDOFF_KEY] == true or env[DEV_GENV_SKIP_SYNC] == true
         end,
         FetchPublicVersion = fetchPublicVersionAndReload,
+        UpdateToLatest = function(progressUi, opts)
+            opts = opts or {}
+            log("updating workspace files to latest…")
+            if opts.clearDev ~= false then
+                clearDevMarkers()
+            end
+            local bag = { ok = false, stats = nil }
+            local callOk, callErr = pcall(function()
+                local synced, stats = syncFromGitHub(progressUi)
+                bag.ok = synced == true
+                bag.stats = stats
+            end)
+            if not callOk then
+                return false, tostring(callErr)
+            end
+            if not bag.ok then
+                return false, "sync failed", bag.stats
+            end
+            local stats = bag.stats or {}
+            local shouldReload = opts.reload == true and ((stats.updated or 0) > 0 or opts.forceReload == true)
+            if shouldReload then
+                if progressUi and type(progressUi.SetStatus) == "function" then
+                    progressUi:SetStatus("Reloading…")
+                end
+                task.wait(0.2)
+                destroyRunningTool()
+                return reloadPublicBootstrap()
+            end
+            return true, stats
+        end,
         DevMode = devMode == true,
     }
 end
@@ -595,7 +661,7 @@ if showInstaller then
             return nil
         end
         pcall(function()
-            installerUi:ShowProgress()
+            installerUi:ShowProgress("install")
         end)
         if devSkipSync then
             installerUi:SetStatus("Dev mode — using local files")
@@ -611,6 +677,25 @@ local syncOk, syncErr = true, nil
 if devSkipSync then
     log("dev mode: skipping syncFromGitHub")
 else
+    -- Show updater progress when files need refreshing (not only first install).
+    if not installerUi then
+        local peekOk, remoteManifest = pcall(fetchRemoteManifest)
+        local pending = 0
+        if peekOk then
+            pending = #collectPendingUpdates(remoteManifest)
+        end
+        if pending > 0 then
+            local uiOk, uiOrErr = pcall(loadInstallerUi, false)
+            if uiOk then
+                installerUi = uiOrErr
+                pcall(function()
+                    installerUi:ShowUpdateProgress()
+                end)
+            else
+                log("updater UI unavailable: " .. tostring(uiOrErr))
+            end
+        end
+    end
     syncOk, syncErr = pcall(function()
         return syncFromGitHub(installerUi)
     end)

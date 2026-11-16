@@ -539,6 +539,20 @@ function InstallerUI.new(opts)
     status.Parent = progressPage
     self.Status = status
 
+    local detail = Instance.new("TextLabel")
+    detail.Name = "Detail"
+    detail.AnchorPoint = Vector2.new(0.5, 0)
+    detail.Position = UDim2.new(0.5, 0, 0, 120)
+    detail.Size = UDim2.new(1, -40, 0, 14)
+    detail.BackgroundTransparency = 1
+    detail.Font = Enum.Font.GothamMedium
+    detail.TextSize = 11
+    detail.TextColor3 = Color3.fromRGB(113, 113, 122)
+    detail.Text = ""
+    detail.TextTruncate = Enum.TextTruncate.AtEnd
+    detail.Parent = progressPage
+    self.Detail = detail
+
     -- CanvasGroup clips
     local barBg
     do
@@ -546,7 +560,7 @@ function InstallerUI.new(opts)
             local g = Instance.new("CanvasGroup")
             g.Name = "BarBg"
             g.AnchorPoint = Vector2.new(0.5, 0)
-            g.Position = UDim2.new(0.5, 0, 0, 132)
+            g.Position = UDim2.new(0.5, 0, 0, 144)
             g.Size = UDim2.new(1, -64, 0, 6)
             g.BackgroundColor3 = BORDER
             g.BorderSizePixel = 0
@@ -560,7 +574,7 @@ function InstallerUI.new(opts)
             barBg = Instance.new("Frame")
             barBg.Name = "BarBg"
             barBg.AnchorPoint = Vector2.new(0.5, 0)
-            barBg.Position = UDim2.new(0.5, 0, 0, 132)
+            barBg.Position = UDim2.new(0.5, 0, 0, 144)
             barBg.Size = UDim2.new(1, -64, 0, 6)
             barBg.BackgroundColor3 = BORDER
             barBg.BorderSizePixel = 0
@@ -588,7 +602,7 @@ function InstallerUI:WaitForAccept()
     return self._accepted == true
 end
 
-function InstallerUI:ShowProgress()
+function InstallerUI:ShowProgress(mode)
     if self.AgreementPage then
         self.AgreementPage.Visible = false
     end
@@ -599,11 +613,20 @@ function InstallerUI:ShowProgress()
         TweenService:Create(
             self.Card,
             TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-            { Size = UDim2.fromOffset(320, 176) }
+            { Size = UDim2.fromOffset(320, 188) }
         ):Play()
     end
     self:_startSpin()
-    self:SetStatus("Installing files")
+    local isUpdate = mode == "update"
+    if self.Title then
+        self.Title.Text = isUpdate and "Updating to latest" or "Installing files"
+    end
+    self:SetStatus(isUpdate and "Checking files…" or "Installing files")
+    self:SetDetail("")
+end
+
+function InstallerUI:ShowUpdateProgress()
+    self:ShowProgress("update")
 end
 
 function InstallerUI:_startSpin()
@@ -626,13 +649,22 @@ function InstallerUI:SetStatus(text)
     end
 end
 
-function InstallerUI:SetProgress(done, total)
+function InstallerUI:SetDetail(text)
+    if self.Detail then
+        self.Detail.Text = tostring(text or "")
+    end
+end
+
+function InstallerUI:SetProgress(done, total, fileName)
     done = math.max(0, tonumber(done) or 0)
     total = math.max(0, tonumber(total) or 0)
     local alpha = 0
     if total > 0 then
         alpha = math.clamp(done / total, 0, 1)
         self:SetStatus(string.format("%d / %d files", done, total))
+    end
+    if fileName ~= nil then
+        self:SetDetail(tostring(fileName))
     end
     if self.BarFill then
         TweenService:Create(

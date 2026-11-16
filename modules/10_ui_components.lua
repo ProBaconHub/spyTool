@@ -341,6 +341,8 @@ function UIComponents.Toggle(parent, initialState, callback, label)
         Scale = 1,
         Parent = knob,
     })
+    local knobStroke = createStroke(knob, Color3.new(1, 1, 1), 0.5)
+    knobStroke.Transparency = 1
     
     local hitbox = createInstance("TextButton", {
         Size = UDim2.new(1, 0, 1, 0),
@@ -355,6 +357,7 @@ function UIComponents.Toggle(parent, initialState, callback, label)
         local dur = animate == false and 0 or 0.2
         knobScale.Scale = 1
         knob.BackgroundTransparency = 0
+        knobStroke.Transparency = 1
         tween(toggleBg, {BackgroundColor3 = state and Theme.Primary or Theme.BackgroundTertiary}, dur)
         tween(knob, {Position = knobPosForState(state)}, dur)
     end
@@ -362,10 +365,18 @@ function UIComponents.Toggle(parent, initialState, callback, label)
     local function setKnobDragging(active)
         if active then
             tween(knobScale, {Scale = 1.45}, 0.22)
-            tween(knob, {BackgroundTransparency = 0.45}, 0.22)
+            tween(knob, {
+                BackgroundTransparency = 0.65,
+                BackgroundColor3 = Color3.new(1, 1, 1),
+            }, 0.22)
+            tween(knobStroke, {Transparency = 0}, 0.22)
         else
             tween(knobScale, {Scale = 1}, 0.2)
-            tween(knob, {BackgroundTransparency = 0}, 0.2)
+            tween(knob, {
+                BackgroundTransparency = 0,
+                BackgroundColor3 = Theme.TextPrimary,
+            }, 0.2)
+            tween(knobStroke, {Transparency = 1}, 0.2)
         end
     end
     
@@ -421,15 +432,17 @@ function UIComponents.Toggle(parent, initialState, callback, label)
             dragging = false
             return
         end
-        local minX = knobPad
-        local maxX = trackW - knobSize - knobPad
-        local rel = input.Position.X - toggleBg.AbsolutePosition.X - knobSize / 2
-        rel = math.clamp(rel, minX, maxX)
-        if math.abs(rel - (state and maxX or minX)) > 2 then
+        -- Position is center (AnchorPoint 0.5, 0.5) — do not apply top-left Y offsets.
+        local minCenter = knobPad + knobSize * 0.5
+        local maxCenter = trackW - knobPad - knobSize * 0.5
+        local centerX = input.Position.X - toggleBg.AbsolutePosition.X
+        centerX = math.clamp(centerX, minCenter, maxCenter)
+        local restCenter = state and maxCenter or minCenter
+        if math.abs(centerX - restCenter) > 2 then
             didDrag = true
         end
-        knob.Position = UDim2.new(0, rel, 0.5, -knobSize / 2)
-        local pct = (rel - minX) / math.max(1, maxX - minX)
+        knob.Position = UDim2.new(0, centerX, 0.5, 0)
+        local pct = (centerX - minCenter) / math.max(1, maxCenter - minCenter)
         toggleBg.BackgroundColor3 = Theme.BackgroundTertiary:Lerp(Theme.Primary, pct)
     end)
     
@@ -601,14 +614,24 @@ function UIComponents.Slider(parent, min, max, initialValue, step, callback, for
         Scale = 1,
         Parent = knob,
     })
+    local knobStroke = createStroke(knob, Color3.new(1, 1, 1), 1)
+    knobStroke.Transparency = 1
 
     local function setSliderKnobDragging(active)
         if active then
             tween(knobScale, {Scale = 1.55}, 0.22)
-            tween(knob, {BackgroundTransparency = 0.55}, 0.22)
+            tween(knob, {
+                BackgroundTransparency = 0.7,
+                BackgroundColor3 = Color3.new(1, 1, 1),
+            }, 0.22)
+            tween(knobStroke, {Transparency = 0}, 0.22)
         else
             tween(knobScale, {Scale = 1}, 0.2)
-            tween(knob, {BackgroundTransparency = 0}, 0.2)
+            tween(knob, {
+                BackgroundTransparency = 0,
+                BackgroundColor3 = Theme.TextPrimary,
+            }, 0.2)
+            tween(knobStroke, {Transparency = 1}, 0.2)
         end
     end
     

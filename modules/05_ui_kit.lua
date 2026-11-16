@@ -192,6 +192,21 @@ local function measureTextWidth(text, textSize, font)
     textSize = textSize or 11
     font = font or Theme.FontFamily
     if TextService then
+        if typeof(font) == "Font" then
+            local ok, bounds = pcall(function()
+                local params = Instance.new("GetTextBoundsParams")
+                params.Text = text
+                params.Font = font
+                params.Size = textSize
+                params.Width = 10000
+                return TextService:GetTextBoundsAsync(params)
+            end)
+            if ok and typeof(bounds) == "Vector2" and bounds.X > 0 and bounds.X < 4000 then
+                return math.ceil(bounds.X)
+            end
+            -- Custom FontFace measure failed/unreliable — fall through to enum estimate.
+            font = Theme.FontFamilyBold
+        end
         local ok, bounds = pcall(function()
             return TextService:GetTextSize(text, textSize, font, Vector2.new(10000, textSize + 8))
         end)
@@ -200,6 +215,36 @@ local function measureTextWidth(text, textSize, font)
         end
     end
     return math.max(8, math.ceil(#text * textSize * 0.55))
+end
+
+local function applyFontFace(label, fontFace, fallbackEnum)
+    if not label then
+        return false
+    end
+    if fontFace then
+        local ok = pcall(function()
+            label.FontFace = fontFace
+        end)
+        if ok then
+            return true
+        end
+    end
+    -- Broken custom FontFace overrides Enum.Font visuals — reset via fromEnum when possible.
+    if fallbackEnum then
+        local okFace = pcall(function()
+            if Font and type(Font.fromEnum) == "function" then
+                label.FontFace = Font.fromEnum(fallbackEnum)
+            else
+                label.Font = fallbackEnum
+            end
+        end)
+        if not okFace then
+            pcall(function()
+                label.Font = fallbackEnum
+            end)
+        end
+    end
+    return false
 end
 
 local function createPill(props, outline)

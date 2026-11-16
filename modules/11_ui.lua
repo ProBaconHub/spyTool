@@ -941,12 +941,20 @@ function RemoteSpyUI:CreateTitleBar()
     }, false)
 
     local brandPadX = 10
-    local logoSize = 15
-    local logoTextGap = 5
+    local logoSize = 28
+    local logoLowerPx = 2
+    local logoTextGap = 6
+    local titleVersionGap = 2
     local brandActionsGap = 8
     local windowTitleText = "Spy Tool"
-    local windowTitleW = measureTextWidth(windowTitleText, 12, Theme.FontFamilyBold)
-    local brandW = logoSize + logoTextGap + windowTitleW
+    local titleTextSize = 16
+    local versionTextSize = 11
+    local brandFont = getAssetFont("fonts/SGEO-Regular.ttf", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+    local measureFont = brandFont or Theme.FontFamilyBold
+    local windowTitleW = measureTextWidth(windowTitleText, titleTextSize, measureFont)
+    local versionShort = getSpyToolVersionShort()
+    local versionShortW = measureTextWidth(versionShort, versionTextSize, measureFont)
+    local brandW = logoSize + logoTextGap + windowTitleW + titleVersionGap + versionShortW
 
     local brand = createInstance("Frame", {
         Name = "Brand",
@@ -960,7 +968,7 @@ function RemoteSpyUI:CreateTitleBar()
     local logoImage = createInstance("ImageLabel", {
         Name = "Logo",
         Size = UDim2.new(0, logoSize, 0, logoSize),
-        Position = UDim2.new(0, 0, 0.5, 0),
+        Position = UDim2.new(0, 0, 0.5, logoLowerPx),
         AnchorPoint = Vector2.new(0, 0.5),
         BackgroundTransparency = 1,
         Image = "",
@@ -973,31 +981,53 @@ function RemoteSpyUI:CreateTitleBar()
     local logoFallback = createInstance("TextLabel", {
         Name = "LogoFallback",
         Size = UDim2.new(0, logoSize, 0, logoSize),
-        Position = UDim2.new(0, 0, 0.5, 0),
+        Position = UDim2.new(0, 0, 0.5, logoLowerPx),
         AnchorPoint = Vector2.new(0, 0.5),
         BackgroundTransparency = 1,
         Text = "S",
         TextColor3 = Theme.Primary,
-        TextSize = 12,
+        TextSize = 14,
         Font = Theme.FontFamilyBold,
         ZIndex = 12,
         Parent = brand
     })
     applyAssetIcon(logoImage, "logo.png", logoFallback)
 
-    createInstance("TextLabel", {
+    local titleX = logoSize + logoTextGap
+    -- Shared bottom edge so the smaller version sits on the title baseline ("floor").
+    local titleBandH = titleTextSize + 4
+    local titleLabel = createInstance("TextLabel", {
         Name = "TitleText",
-        Size = UDim2.new(0, windowTitleW, 1, 0),
-        Position = UDim2.new(0, logoSize + logoTextGap, 0, 0),
+        Size = UDim2.new(0, windowTitleW, 0, titleBandH),
+        Position = UDim2.new(0, titleX, 0.5, 0),
+        AnchorPoint = Vector2.new(0, 0.5),
         BackgroundTransparency = 1,
         Text = windowTitleText,
         TextColor3 = Theme.TextPrimary,
-        TextSize = 12,
+        TextSize = titleTextSize,
         Font = Theme.FontFamilyBold,
         TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Bottom,
         ZIndex = 11,
         Parent = brand
     })
+    local versionLabel = createInstance("TextLabel", {
+        Name = "TitleVersion",
+        Size = UDim2.new(0, versionShortW, 0, titleBandH),
+        Position = UDim2.new(0, titleX + windowTitleW + titleVersionGap, 0.5, 0),
+        AnchorPoint = Vector2.new(0, 0.5),
+        BackgroundTransparency = 1,
+        Text = versionShort,
+        TextColor3 = Theme.TextMuted,
+        TextSize = versionTextSize,
+        Font = Theme.FontFamilyBold,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Bottom,
+        ZIndex = 11,
+        Parent = brand
+    })
+    applyFontFace(titleLabel, brandFont, Theme.FontFamilyBold)
+    applyFontFace(versionLabel, brandFont, Theme.FontFamilyBold)
 
     local titleActions = createInstance("Frame", {
         Name = "TitleActions",
@@ -5473,13 +5503,60 @@ function RemoteSpyUI:CreateSettingsTab()
     createListLayout(blockedScroll, 3)
     
     self.BlockedItemsScroll = blockedScroll
-    
-    
-    local aboutCard = createPanel(Theme.Radius.Medium, {
+
+    local updatesCard = createPanel(Theme.Radius.Medium, {
         Size = UDim2.new(1, 0, 0, 0),
         AutomaticSize = Enum.AutomaticSize.Y,
         ImageColor3 = Theme.BackgroundSecondary,
         LayoutOrder = 3,
+        Parent = scroll,
+    }, true)
+    createPadding(updatesCard, 14)
+    createListLayout(updatesCard, 8)
+
+    createInstance("TextLabel", {
+        Size = UDim2.new(1, 0, 0, 20),
+        BackgroundTransparency = 1,
+        Text = "Updates",
+        TextColor3 = Theme.TextPrimary,
+        TextSize = 13,
+        Font = Theme.FontFamilyBold,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        LayoutOrder = 1,
+        Parent = updatesCard,
+    })
+
+    local updateStatus = createInstance("TextLabel", {
+        Name = "UpdateStatus",
+        Size = UDim2.new(1, 0, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundTransparency = 1,
+        Text = "Installed version " .. getSpyToolVersion() .. ". Pull the latest workspace files from GitHub when available.",
+        TextColor3 = Theme.TextSecondary,
+        TextSize = 11,
+        Font = Theme.FontFamily,
+        TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        LayoutOrder = 2,
+        Parent = updatesCard,
+    })
+
+    local updateRow = createInstance("Frame", {
+        Size = UDim2.new(1, 0, 0, 34),
+        BackgroundTransparency = 1,
+        LayoutOrder = 3,
+        Parent = updatesCard,
+    })
+
+    UIComponents.Button(updateRow, "Update to latest", "primary", function()
+        self:StartUpdateToLatest()
+    end)
+
+    local aboutCard = createPanel(Theme.Radius.Medium, {
+        Size = UDim2.new(1, 0, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        ImageColor3 = Theme.BackgroundSecondary,
+        LayoutOrder = 4,
         Parent = scroll,
     }, true)
     createPadding(aboutCard, 14)
@@ -5498,6 +5575,18 @@ function RemoteSpyUI:CreateSettingsTab()
     })
     
     createInstance("TextLabel", {
+        Size = UDim2.new(1, 0, 0, 16),
+        BackgroundTransparency = 1,
+        Text = "Version " .. getSpyToolVersion(),
+        TextColor3 = Theme.TextMuted,
+        TextSize = 11,
+        Font = Theme.FontFamily,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        LayoutOrder = 2,
+        Parent = aboutCard
+    })
+
+    createInstance("TextLabel", {
         Size = UDim2.new(1, 0, 0, 0),
         AutomaticSize = Enum.AutomaticSize.Y,
         BackgroundTransparency = 1,
@@ -5507,7 +5596,7 @@ function RemoteSpyUI:CreateSettingsTab()
         Font = Theme.FontFamily,
         TextWrapped = true,
         TextXAlignment = Enum.TextXAlignment.Left,
-        LayoutOrder = 2,
+        LayoutOrder = 3,
         Parent = aboutCard
     })
 
@@ -5541,7 +5630,7 @@ function RemoteSpyUI:CreateSettingsTab()
             Size = UDim2.new(1, 0, 0, 0),
             AutomaticSize = Enum.AutomaticSize.Y,
             ImageColor3 = Theme.BackgroundSecondary,
-            LayoutOrder = 4,
+            LayoutOrder = 5,
             Parent = scroll,
         }, true)
         createPadding(devCard, 14)
@@ -5563,7 +5652,7 @@ function RemoteSpyUI:CreateSettingsTab()
             Size = UDim2.new(1, 0, 0, 0),
             AutomaticSize = Enum.AutomaticSize.Y,
             BackgroundTransparency = 1,
-            Text = "Dev mode is active (spyTool/.dev). Local files are used and GitHub sync is skipped.",
+            Text = "Dev mode is active (spyTool/.dev). Local files are used and GitHub sync is skipped. Update to latest clears .dev and reloads the public release.",
             TextColor3 = Theme.TextSecondary,
             TextSize = 11,
             Font = Theme.FontFamily,
@@ -5572,33 +5661,183 @@ function RemoteSpyUI:CreateSettingsTab()
             LayoutOrder = 2,
             Parent = devCard,
         })
-
-        local fetchRow = createInstance("Frame", {
-            Size = UDim2.new(1, 0, 0, 34),
-            BackgroundTransparency = 1,
-            LayoutOrder = 3,
-            Parent = devCard,
-        })
-
-        UIComponents.Button(fetchRow, "Fetch public version", "primary", function()
-            local env = (getgenv and getgenv()) or nil
-            local boot = env and env.__SpyToolBootstrap
-            local fetchFn = boot and boot.FetchPublicVersion
-            if type(fetchFn) ~= "function" then
-                UIComponents.Notification(self.ScreenGui, "Bootstrap API unavailable", "error")
-                return
-            end
-            UIComponents.Notification(self.ScreenGui, "Fetching public release…", "info")
-            task.defer(function()
-                local ok, err = pcall(fetchFn)
-                if not ok then
-                    warn("[SpyTool] Fetch public version failed: " .. tostring(err))
-                end
-            end)
-        end)
     end
-    
+
+    self._updateStatusLabel = updateStatus
     self.SettingsTab = tab
+end
+
+function RemoteSpyUI:_createUpdaterOverlay()
+    if self._updaterOverlay and self._updaterOverlay.Parent then
+        return self._updaterOverlay
+    end
+    local parent = self.MainFrame or self.ScreenGui
+    local overlay = createSquircle(Theme.Radius.Window, "Window", {
+        Name = "UpdaterOverlay",
+        Size = UDim2.new(1, 0, 1, 0),
+        ImageColor3 = Theme.Background,
+        ImageTransparency = 0.08,
+        ZIndex = 600,
+        Parent = parent,
+    }, false)
+    pcall(function()
+        overlay.Active = true
+    end)
+
+    local card = createPanel(Theme.Radius.Medium, {
+        Name = "UpdaterCard",
+        Size = UDim2.new(0, 300, 0, 118),
+        Position = UDim2.new(0.5, 0, 0.5, 0),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        ImageColor3 = Theme.BackgroundSecondary,
+        ZIndex = 601,
+        Parent = overlay,
+    }, true)
+
+    local title = createInstance("TextLabel", {
+        Name = "Title",
+        Size = UDim2.new(1, -24, 0, 20),
+        Position = UDim2.new(0, 12, 0, 14),
+        BackgroundTransparency = 1,
+        Text = "Updating to latest",
+        TextColor3 = Theme.TextPrimary,
+        TextSize = 13,
+        Font = Theme.FontFamilyBold,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 602,
+        Parent = card,
+    })
+
+    local status = createInstance("TextLabel", {
+        Name = "Status",
+        Size = UDim2.new(1, -24, 0, 16),
+        Position = UDim2.new(0, 12, 0, 40),
+        BackgroundTransparency = 1,
+        Text = "Preparing…",
+        TextColor3 = Theme.TextSecondary,
+        TextSize = 11,
+        Font = Theme.FontFamily,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        ZIndex = 602,
+        Parent = card,
+    })
+
+    local detail = createInstance("TextLabel", {
+        Name = "Detail",
+        Size = UDim2.new(1, -24, 0, 14),
+        Position = UDim2.new(0, 12, 0, 58),
+        BackgroundTransparency = 1,
+        Text = "",
+        TextColor3 = Theme.TextMuted,
+        TextSize = 10,
+        Font = Theme.FontFamily,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        ZIndex = 602,
+        Parent = card,
+    })
+
+    local barBg = createInstance("Frame", {
+        Size = UDim2.new(1, -24, 0, 6),
+        Position = UDim2.new(0, 12, 1, -22),
+        BackgroundColor3 = Theme.BackgroundTertiary,
+        ZIndex = 602,
+        Parent = card,
+    })
+    createCorner(barBg, Theme.CornerRadiusFull)
+    local barFill = createInstance("Frame", {
+        Size = UDim2.new(0.04, 0, 1, 0),
+        BackgroundColor3 = Theme.Primary,
+        ZIndex = 603,
+        Parent = barBg,
+    })
+    createCorner(barFill, Theme.CornerRadiusFull)
+
+    local bridge = {
+        Gui = overlay,
+        Title = title,
+        Status = status,
+        Detail = detail,
+        BarFill = barFill,
+        SetStatus = function(_, text)
+            status.Text = tostring(text or "")
+        end,
+        SetDetail = function(_, text)
+            detail.Text = tostring(text or "")
+        end,
+        SetProgress = function(_, done, total, fileName)
+            done = math.max(0, tonumber(done) or 0)
+            total = math.max(0, tonumber(total) or 0)
+            local alpha = total > 0 and math.clamp(done / total, 0, 1) or 0
+            if total > 0 then
+                status.Text = string.format("%d / %d files", done, total)
+            end
+            if fileName ~= nil then
+                detail.Text = tostring(fileName)
+            end
+            tween(barFill, {Size = UDim2.new(alpha, 0, 1, 0)}, 0.12)
+        end,
+        Destroy = function()
+            pcall(function()
+                overlay:Destroy()
+            end)
+            if self._updaterOverlay == bridge then
+                self._updaterOverlay = nil
+            end
+        end,
+    }
+    self._updaterOverlay = bridge
+    return bridge
+end
+
+function RemoteSpyUI:StartUpdateToLatest()
+    if self._updatingToLatest then
+        return
+    end
+    local env = (getgenv and getgenv()) or nil
+    local boot = env and env.__SpyToolBootstrap
+    local updateFn = boot and boot.UpdateToLatest
+    if type(updateFn) ~= "function" then
+        UIComponents.Notification(self.ScreenGui, "Bootstrap updater unavailable", "error")
+        return
+    end
+
+    self._updatingToLatest = true
+    if self._updateStatusLabel then
+        self._updateStatusLabel.Text = "Updating workspace files…"
+    end
+    local overlay = self:_createUpdaterOverlay()
+    overlay:SetStatus("Fetching manifest…")
+    overlay:SetDetail("")
+
+    task.spawn(function()
+        local ok, result = pcall(function()
+            return updateFn(overlay, { clearDev = true, reload = true, forceReload = true })
+        end)
+        self._updatingToLatest = false
+        if not ok then
+            warn("[SpyTool] Update to latest failed: " .. tostring(result))
+            if overlay and overlay.Destroy then
+                overlay:Destroy()
+            end
+            if self._updateStatusLabel then
+                self._updateStatusLabel.Text = "Update failed. Try again."
+            end
+            UIComponents.Notification(self.ScreenGui, "Update failed", "error")
+            return
+        end
+        -- reload=true replaces the process; if we return here, sync finished without reload.
+        if overlay and overlay.Destroy then
+            overlay:Destroy()
+        end
+        if type(result) == "table" and (result.updated or 0) == 0 then
+            if self._updateStatusLabel then
+                self._updateStatusLabel.Text = "Already up to date (" .. getSpyToolVersion() .. ")."
+            end
+            UIComponents.Notification(self.ScreenGui, "Already up to date", "success")
+        end
+    end)
 end
 
 function RemoteSpyUI:UpdateStatusLabel()

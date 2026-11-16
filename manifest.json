@@ -3,7 +3,7 @@
     "repo":  "ProBaconHub/spyTool",
     "branch":  "main",
     "algorithm":  "adler32pair-length",
-    "generatedAt":  "2026-11-16T08:02:05.3760877Z",
+    "generatedAt":  "2026-11-16T09:15:00.7390988Z",
     "files":  [
                   {
                       "path":  "asset/BindableEvent.png",
@@ -40,6 +40,10 @@
                   {
                       "path":  "asset/folder.png",
                       "hash":  "1704:00030d350a18d5a0"
+                  },
+                  {
+                      "path":  "asset/fonts/SGEO-Regular.ttf",
+                      "hash":  "101024:006dc8cf6d3b8a1f"
                   },
                   {
                       "path":  "asset/function.png",
@@ -1307,7 +1311,7 @@
                   },
                   {
                       "path":  "asset/logo.png",
-                      "hash":  "1287:000259b505bcd80d"
+                      "hash":  "225588:01aeedf2557ef6ba"
                   },
                   {
                       "path":  "asset/maximize.png",
@@ -1423,7 +1427,7 @@
                   },
                   {
                       "path":  "modules/01_core.lua",
-                      "hash":  "9762:000bf570e96b98f2"
+                      "hash":  "18571:00164c8a372993a4"
                   },
                   {
                       "path":  "modules/02_stealth.lua",
@@ -1439,7 +1443,7 @@
                   },
                   {
                       "path":  "modules/05_ui_kit.lua",
-                      "hash":  "56270:003f81ae676d5422"
+                      "hash":  "57756:004124a7d4a2bdbe"
                   },
                   {
                       "path":  "modules/06_function_analyzer.lua",
@@ -1459,11 +1463,11 @@
                   },
                   {
                       "path":  "modules/10_ui_components.lua",
-                      "hash":  "71441:00501da6cf237f8d"
+                      "hash":  "72431:005131f901543e26"
                   },
                   {
                       "path":  "modules/11_ui.lua",
-                      "hash":  "332145:0177ba342d981297"
+                      "hash":  "340454:01815c0dcf824a62"
                   },
                   {
                       "path":  "README.md",
@@ -1471,7 +1475,7 @@
                   },
                   {
                       "path":  "spyTool.lua",
-                      "hash":  "19459:00162ae3470e9e68"
+                      "hash":  "22994:001a4ac59a80fa15"
                   }
               ]
 }
