@@ -917,7 +917,6 @@ end
 function RemoteSpyUI:CreateTitleBar()
     local windowR = Theme.Radius.Window or 28
     local titleH = self:GetTitleBarHeight()
-    local _, mainH = self:GetMainFrameLayoutSize()
 
     local titleBar = createInstance("TextButton", {
         Name = "TitleBar",
@@ -930,24 +929,16 @@ function RemoteSpyUI:CreateTitleBar()
         Parent = self.MainFrame,
     })
 
-    local titleFill = createSquircle(windowR, "Window", {
+    -- Top cap sized to the title bar (same TL-TR plate language as Remotes header).
+    -- Do not use a full-window plate + clip — that makes the visible corner look circular.
+    local titleFill = createSquircle(windowR, "Window-TL-TR", {
         Name = "TitleBarFill",
-        Size = UDim2.new(1, 0, 0, math.max(1, mainH)),
+        Size = UDim2.new(1, 0, 1, 0),
         Position = UDim2.new(0, 0, 0, 0),
         ImageColor3 = Theme.BackgroundSecondary,
         ZIndex = 10,
         Parent = titleBar,
     }, false)
-
-    local function syncTitleFillSize()
-        local _, h = self:GetMainFrameLayoutSize()
-        if titleFill and h > 0 then
-            titleFill.Size = UDim2.new(1, 0, 0, h)
-        end
-    end
-    self:_trackConnection(self.MainFrame:GetPropertyChangedSignal("Size"):Connect(syncTitleFillSize))
-    self:_trackConnection(self.MainFrame:GetPropertyChangedSignal("AbsoluteSize"):Connect(syncTitleFillSize))
-    task.defer(syncTitleFillSize)
 
     local brandPadX = 10
     local logoSize = 15
@@ -1113,6 +1104,8 @@ function RemoteSpyUI:CreateSidebar()
         Parent = self.MainFrame
     })
 
+    -- Full-window Secondary plate, clipped to the sidebar strip so bottom-left
+    -- keeps the same G2 corner as MainFrame (title top uses its own TL-TR plate).
     local mainW, mainH = self:GetMainFrameLayoutSize()
     local sidebarFill = createSquircle(windowR, "Window", {
         Name = "SidebarFill",

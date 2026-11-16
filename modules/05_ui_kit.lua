@@ -139,22 +139,22 @@ local SquircleShapeDefs = {
         Radius = 310,
     },
     Window = {
-        File = "squircle/window.png",
+        File = "squircle/squircle.png",
         Rect = Rect.new(460, 460, 460, 460),
         Radius = 310,
     },
     WindowOutline = {
-        File = "squircle/window-outline.png",
+        File = "squircle/squircle-outline.png",
         Rect = Rect.new(512, 512, 512, 512),
         Radius = 310,
     },
     ["Window-TL-TR"] = {
-        File = "squircle/window-tl-tr.png",
+        File = "squircle/squircle-tl-tr.png",
         Rect = Rect.new(512, 512, 512, 512),
         Radius = 310,
     },
     ["Window-BL-BR"] = {
-        File = "squircle/window-bl-br.png",
+        File = "squircle/squircle-bl-br.png",
         Rect = Rect.new(512, 0, 512, 0),
         Radius = 310,
     },
@@ -336,7 +336,9 @@ createSquircle = function(radius, shapeType, props, interactive)
         end
     end
 
+    local usedFallback = false
     if not inst then
+        usedFallback = true
         local fallbackProps = {
             BackgroundColor3 = props.ImageColor3 or Theme.BackgroundTertiary,
             BackgroundTransparency = props.ImageTransparency or 0,
@@ -372,6 +374,8 @@ createSquircle = function(radius, shapeType, props, interactive)
     pcall(function()
         inst:SetAttribute("SquircleRadius", radiusPx)
         inst:SetAttribute("SquircleType", shapeType)
+        inst:SetAttribute("SquircleSource", usedFallback and "uicorner-fallback" or (shape.Source or "unknown"))
+        inst:SetAttribute("HasG2Plate", not usedFallback)
     end)
 
     if hasImage and inst and isBottomCap then
@@ -594,6 +598,7 @@ createCorner = function(parent, radius)
 
     if isPillOrCircle or autoSize ~= Enum.AutomaticSize.None then
         parent:SetAttribute("HasG2Fill", false)
+        parent:SetAttribute("CornerMode", "UICorner")
         local uiR = isPillOrCircle and 999 or math.floor(math.clamp(radiusPx, 1, 64))
         return createInstance("UICorner", {
             CornerRadius = UDim.new(0, uiR),
@@ -613,6 +618,7 @@ createCorner = function(parent, radius)
         ZIndex = 0,
         Parent = parent,
     }, false)
+    parent:SetAttribute("CornerMode", "G2")
 
     local host = createInstance("Frame", {
         Name = "G2Content",

@@ -35,18 +35,18 @@ local Theme = {
     
     
     Radius = {
-        Window = 28,
-        Large = 14,
-        Medium = 10,
-        Small = 8,
+        Window = 30,
+        Large = 15,
+        Medium = 12,
+        Small = 9,
         Chip = 12,
     },
     TitleBarHeight = 36,
     
     
-    CornerRadius = UDim.new(0, 10),
-    CornerRadiusSmall = UDim.new(0, 8),
-    CornerRadiusLarge = UDim.new(0, 16),
+    CornerRadius = UDim.new(0, 12),
+    CornerRadiusSmall = UDim.new(0, 9),
+    CornerRadiusLarge = UDim.new(0, 15),
     CornerRadiusFull = UDim.new(0, 999), 
     
     FontFamily = Enum.Font.GothamMedium,
