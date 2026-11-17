@@ -437,7 +437,22 @@ function RemoteSpyUI:_syncRemoteDirectionChipVisuals(path)
     if not tabs then
         return
     end
+    local group = path and RemoteScanner.GroupedLogs[path]
+    local infoType = group and group.Info and group.Info.Type or ""
+    local baseType = tostring(infoType):gsub(" %(Incoming%)", "")
+    local hideDirection = baseType == "BindableEvent" or baseType == "BindableFunction"
+    local dirTabsFrame = nil
+    for _, btn in pairs(tabs) do
+        if btn and btn.Parent then
+            dirTabsFrame = btn.Parent
+            break
+        end
+    end
+    if dirTabsFrame then
+        dirTabsFrame.Visible = not hideDirection
+    end
     for name, btn in pairs(tabs) do
+        btn.Visible = not hideDirection
         local active = name == mode
         if isSquircle(btn) then
             btn.ImageColor3 = active and Theme.Primary or Theme.BackgroundTertiary
@@ -5841,6 +5856,9 @@ function RemoteSpyUI:StartUpdateToLatest()
 end
 
 function RemoteSpyUI:UpdateStatusLabel()
+    if not self.StatusLabel then
+        return
+    end
     local remoteSpy = RemoteScanner.IsSpying
     local httpSpy = HttpInterceptor.IsSpying
     
@@ -5857,6 +5875,7 @@ function RemoteSpyUI:UpdateStatusLabel()
         self.StatusLabel.Text = "Ready"
         self.StatusLabel.TextColor3 = Theme.TextMuted
     end
+    self.StatusLabel.Visible = self.IsMinimized ~= true
 end
 
 function RemoteSpyUI:SwitchTab(tabName)
@@ -6274,15 +6293,19 @@ function RemoteSpyUI:IncrementalRefreshArgsPanel(group, forceFull)
     
     local path = group.Info.Path
     local dirMode = self:_getRemoteDirectionMode(path)
+    local panelBaseType = tostring(group.Info.Type or ""):gsub(" %(Incoming%)", "")
+    local panelIsBindable = panelBaseType == "BindableEvent" or panelBaseType == "BindableFunction"
     local sortedArgGroups = RemoteScanner:GetSortedArgGroups(path)
     local filteredArgGroups = {}
     for _, argData in ipairs(sortedArgGroups) do
         local argGroup = argData.ArgGroup
         local show = true
-        if dirMode == "Outgoing" then
-            show = argGroup.HasOutgoing == true
-        elseif dirMode == "Incoming" then
-            show = argGroup.HasIncoming == true
+        if not panelIsBindable then
+            if dirMode == "Outgoing" then
+                show = argGroup.HasOutgoing == true
+            elseif dirMode == "Incoming" then
+                show = argGroup.HasIncoming == true
+            end
         end
         if show then
             filteredArgGroups[#filteredArgGroups + 1] = argData
@@ -6483,8 +6506,10 @@ function RemoteSpyUI:CreateRemoteGroupEntry(group, order)
     end
     
     
-    local hasIncoming = group.HasIncomingLogs == true
-    local hasOutgoing = group.HasOutgoingLogs == true
+    local baseType = (info.Type or ""):gsub(" %(Incoming%)", "")
+    local isBindable = baseType == "BindableEvent" or baseType == "BindableFunction"
+    local hasIncoming = (not isBindable) and group.HasIncomingLogs == true
+    local hasOutgoing = (not isBindable) and group.HasOutgoingLogs == true
     
     createTypeIcon(header, info.Type, 18, UDim2.new(0, 6, 0.5, 0))
 
@@ -6644,16 +6669,22 @@ function RemoteSpyUI:CreateArgGroupEntryInPanel(remotePath, argGroup, order, rem
         setSquircleOutline(header, nil, false)
     end
     
-    local argHasIncoming = argGroup.HasIncoming
-    local argHasOutgoing = argGroup.HasOutgoing
+    local remoteInfoType = remoteGroup and remoteGroup.Info and remoteGroup.Info.Type or ""
+    local remoteBaseType = tostring(remoteInfoType):gsub(" %(Incoming%)", "")
+    local isBindableArgs = remoteBaseType == "BindableEvent" or remoteBaseType == "BindableFunction"
+    local argHasIncoming = (not isBindableArgs) and argGroup.HasIncoming
+    local argHasOutgoing = (not isBindableArgs) and argGroup.HasOutgoing
+    local showArgDir = argHasIncoming or argHasOutgoing
 
-    createDirectionIndicator(header, argHasIncoming, argHasOutgoing, {
-        SizePx = 10,
-        Width = 16,
-        Position = UDim2.new(0, 4, 0.5, 0),
-        AnchorPoint = Vector2.new(0, 0.5),
-        ZIndex = 2,
-    })
+    if showArgDir then
+        createDirectionIndicator(header, argHasIncoming, argHasOutgoing, {
+            SizePx = 10,
+            Width = 16,
+            Position = UDim2.new(0, 4, 0.5, 0),
+            AnchorPoint = Vector2.new(0, 0.5),
+            ZIndex = 2,
+        })
+    end
     
     
     local argsPreview = ""
@@ -6675,7 +6706,7 @@ function RemoteSpyUI:CreateArgGroupEntryInPanel(remotePath, argGroup, order, rem
     
     createInstance("TextLabel", {
         Size = UDim2.new(1, -90, 1, 0),
-        Position = UDim2.new(0, 22, 0, 0),
+        Position = UDim2.new(0, showArgDir and 22 or 8, 0, 0),
         BackgroundTransparency = 1,
         Text = argsPreview,
         TextColor3 = isArgsIgnored and Theme.TextMuted or Theme.TextSecondary,
@@ -6826,24 +6857,35 @@ function RemoteSpyUI:CreateArgGroupEntry(parent, remotePath, argGroup, order, re
     })
     
     
+    local expandRemoteType = ""
+    do
+        local groupForType = RemoteScanner.GroupedLogs[remotePath]
+        expandRemoteType = groupForType and groupForType.Info and groupForType.Info.Type or ""
+    end
+    local expandBaseType = tostring(expandRemoteType):gsub(" %(Incoming%)", "")
+    local expandIsBindable = expandBaseType == "BindableEvent" or expandBaseType == "BindableFunction"
     local argHasIncoming = false
     local argHasOutgoing = false
-    for _, log in ipairs(argGroup.Logs) do
-        if log.IsIncoming then
-            argHasIncoming = true
-        else
-            argHasOutgoing = true
+    if not expandIsBindable then
+        for _, log in ipairs(argGroup.Logs) do
+            if log.IsIncoming then
+                argHasIncoming = true
+            else
+                argHasOutgoing = true
+            end
+            if argHasIncoming and argHasOutgoing then break end
         end
-        if argHasIncoming and argHasOutgoing then break end
     end
-    
-    createDirectionIndicator(header, argHasIncoming, argHasOutgoing, {
-        SizePx = 10,
-        Width = 12,
-        Position = UDim2.new(0, 18, 0.5, 0),
-        AnchorPoint = Vector2.new(0, 0.5),
-        ZIndex = 2,
-    })
+
+    if argHasIncoming or argHasOutgoing then
+        createDirectionIndicator(header, argHasIncoming, argHasOutgoing, {
+            SizePx = 10,
+            Width = 12,
+            Position = UDim2.new(0, 18, 0.5, 0),
+            AnchorPoint = Vector2.new(0, 0.5),
+            ZIndex = 2,
+        })
+    end
     
     
     local argsPreview = ""
@@ -7075,35 +7117,39 @@ function RemoteSpyUI:CreateLogEntry(parent, log, order)
     
     
     do
+        local logType = tostring(log.RemoteType or ""):gsub(" %(Incoming%)", "")
+        local hideDir = logType == "BindableEvent" or logType == "BindableFunction"
         local isIncoming = log.IsIncoming == true
         local dirColor = isIncoming and Theme.Cyan or Theme.Success
-        local dirHost = createInstance("Frame", {
-            Name = "LogDirection",
-            Size = UDim2.new(0, 34, 1, 0),
-            Position = UDim2.new(1, -38, 0, 0),
-            BackgroundTransparency = 1,
-            ZIndex = 2,
-            Parent = entry,
-        })
-        createDirectionIndicator(dirHost, isIncoming, not isIncoming, {
-            SizePx = 8,
-            Width = 10,
-            Position = UDim2.new(0, 0, 0.5, 0),
-            AnchorPoint = Vector2.new(0, 0.5),
-            ZIndex = 2,
-        })
-        createInstance("TextLabel", {
-            Size = UDim2.new(0, 22, 1, 0),
-            Position = UDim2.new(0, 12, 0, 0),
-            BackgroundTransparency = 1,
-            Text = isIncoming and "IN" or "OUT",
-            TextColor3 = dirColor,
-            TextSize = 8,
-            Font = Theme.FontFamilyBold,
-            TextXAlignment = Enum.TextXAlignment.Left,
-            ZIndex = 2,
-            Parent = dirHost,
-        })
+        if not hideDir then
+            local dirHost = createInstance("Frame", {
+                Name = "LogDirection",
+                Size = UDim2.new(0, 34, 1, 0),
+                Position = UDim2.new(1, -38, 0, 0),
+                BackgroundTransparency = 1,
+                ZIndex = 2,
+                Parent = entry,
+            })
+            createDirectionIndicator(dirHost, isIncoming, not isIncoming, {
+                SizePx = 8,
+                Width = 10,
+                Position = UDim2.new(0, 0, 0.5, 0),
+                AnchorPoint = Vector2.new(0, 0.5),
+                ZIndex = 2,
+            })
+            createInstance("TextLabel", {
+                Size = UDim2.new(0, 22, 1, 0),
+                Position = UDim2.new(0, 12, 0, 0),
+                BackgroundTransparency = 1,
+                Text = isIncoming and "IN" or "OUT",
+                TextColor3 = dirColor,
+                TextSize = 8,
+                Font = Theme.FontFamilyBold,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                ZIndex = 2,
+                Parent = dirHost,
+            })
+        end
     end
     
     entry:SetAttribute("IsHovered", false)
@@ -7174,6 +7220,11 @@ function RemoteSpyUI:ShowRemoteDetails(group)
     local info = group.Info
     self.DetailsTitle.Text = "Remote overview"
     self:UpdateInspectorChrome()
+    self:_syncRemoteDirectionChipVisuals(info and info.Path)
+
+    if info then
+        RemoteScanner:RefreshConnectionInfo(info)
+    end
     
     local order = 0
     
@@ -7243,12 +7294,81 @@ function RemoteSpyUI:ShowRemoteDetails(group)
     
     local argGroupCount = 0
     for _ in pairs(group.ArgGroups) do argGroupCount = argGroupCount + 1 end
+    local detailsBaseType = tostring(info.Type or ""):gsub(" %(Incoming%)", "")
+    local detailsIsBindable = detailsBaseType == "BindableEvent" or detailsBaseType == "BindableFunction"
     
     UIComponents.PropertyRow(statsSection, "Type", info.Type, 2)
     UIComponents.PropertyRow(statsSection, "Total Calls", group.TotalCalls, 3)
     UIComponents.PropertyRow(statsSection, "Arg Groups", argGroupCount, 4)
-    UIComponents.PropertyRow(statsSection, "Connections", info.ConnectionCount, 5)
+    UIComponents.PropertyRow(statsSection, detailsIsBindable and "Listeners" or "Connections", info.ConnectionCount or 0, 5)
     UIComponents.PropertyRow(statsSection, "Last Call", group.LastCall or "N/A", 6)
+
+    local listeners = info.Listeners
+    if type(listeners) == "table" and #listeners > 0 then
+        order = order + 1
+        local listenersSection = createInstance("Frame", {
+            Size = UDim2.new(1, 0, 0, 0),
+            AutomaticSize = Enum.AutomaticSize.Y,
+            BackgroundColor3 = Theme.Background,
+            LayoutOrder = order,
+            Parent = self.DetailsFrame
+        })
+        createCorner(listenersSection, Theme.CornerRadiusSmall)
+        createPadding(listenersSection, 8)
+        createListLayout(listenersSection, 4)
+
+        createInstance("TextLabel", {
+            Size = UDim2.new(1, 0, 0, 16),
+            BackgroundTransparency = 1,
+            Text = "Listeners (" .. tostring(#listeners) .. ")",
+            TextColor3 = Theme.TextMuted,
+            TextSize = 10,
+            Font = Theme.FontFamilyBold,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            LayoutOrder = 1,
+            Parent = listenersSection
+        })
+
+        for i, listener in ipairs(listeners) do
+            local listenerInfo = listener.Info
+            local title = "Listener " .. tostring(i)
+            if listenerInfo then
+                local name = listenerInfo.Name
+                local source = listenerInfo.ScriptPath ~= "Unknown" and listenerInfo.ScriptPath or listenerInfo.Source
+                if name and name ~= "" and name ~= "anonymous" then
+                    title = name
+                end
+                if source and source ~= "" and source ~= "Unknown" then
+                    title = title .. "  ·  " .. tostring(source)
+                end
+                if listenerInfo.LineDefined and listenerInfo.LineDefined > 0 then
+                    title = title .. ":" .. tostring(listenerInfo.LineDefined)
+                end
+            end
+            UIComponents.PropertyRow(listenersSection, "#" .. tostring(i), title, i + 1)
+        end
+    elseif detailsIsBindable or detailsBaseType == "RemoteEvent" or detailsBaseType == "UnreliableRemoteEvent" then
+        order = order + 1
+        local listenersSection = createInstance("Frame", {
+            Size = UDim2.new(1, 0, 0, 0),
+            AutomaticSize = Enum.AutomaticSize.Y,
+            BackgroundColor3 = Theme.Background,
+            LayoutOrder = order,
+            Parent = self.DetailsFrame
+        })
+        createCorner(listenersSection, Theme.CornerRadiusSmall)
+        createPadding(listenersSection, 8)
+        createInstance("TextLabel", {
+            Size = UDim2.new(1, 0, 0, 18),
+            BackgroundTransparency = 1,
+            Text = "No listeners found",
+            TextColor3 = Theme.TextMuted,
+            TextSize = 11,
+            Font = Theme.FontFamily,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Parent = listenersSection
+        })
+    end
     
     
     order = order + 1
@@ -7348,8 +7468,14 @@ function RemoteSpyUI:ShowLogDetails(log)
     UIComponents.PropertyRow(headerSection, "Timestamp", RemoteScanner:EnsureFullTimestamp(log), 1)
     UIComponents.PropertyRow(headerSection, "Remote Type", log.RemoteType, 2)
     UIComponents.PropertyRow(headerSection, "Blocked", log.Blocked and "Yes" or "No", 3)
-    if log.IsIncoming then
-        UIComponents.PropertyRow(headerSection, "Direction", "Incoming (Server → Client)", 4)
+    local logBaseType = tostring(log.RemoteType or ""):gsub(" %(Incoming%)", "")
+    local logIsBindable = logBaseType == "BindableEvent" or logBaseType == "BindableFunction"
+    if not logIsBindable then
+        if log.IsIncoming then
+            UIComponents.PropertyRow(headerSection, "Direction", "Incoming (Server → Client)", 4)
+        else
+            UIComponents.PropertyRow(headerSection, "Direction", "Outgoing (Client → Server)", 4)
+        end
     end
     
     
@@ -9402,6 +9528,37 @@ function RemoteSpyUI:RefreshBlockedList()
     self.BlockedListFrame.Size = UDim2.new(1, 0, 0, math.max(80, math.min(order * 27 + 12, 160)))
 end
 
+function RemoteSpyUI:_getCollapsedWindowWidth()
+    local brandPadX = 10
+    local controlsPad = 10
+    local brand = self.TitleBar and self.TitleBar:FindFirstChild("Brand")
+    local brandW = 160
+    if brand then
+        brandW = math.max(brand.AbsoluteSize.X, brand.Size.X.Offset)
+    end
+    local controlsW = 56
+    if self.WindowControls then
+        controlsW = math.max(self.WindowControls.AbsoluteSize.X, self.WindowControls.Size.X.Offset)
+    end
+    -- Brand + gap + window controls; status is hidden while collapsed.
+    return math.max(280, brandPadX + brandW + 12 + controlsW + controlsPad)
+end
+
+function RemoteSpyUI:_syncCollapsedChrome()
+    local collapsed = self.IsMinimized == true
+    if self.StatusLabel then
+        -- Centered status overlaps the brand in the short collapsed bar.
+        self.StatusLabel.Visible = not collapsed
+    end
+    if collapsed then
+        if self.TitleActions then
+            self.TitleActions.Visible = false
+        end
+    else
+        self:_syncTitleActions()
+    end
+end
+
 function RemoteSpyUI:_restoreFromMinimized()
     if not self.MainFrame or not self.IsMinimized then
         return
@@ -9414,6 +9571,7 @@ function RemoteSpyUI:_restoreFromMinimized()
     self.OriginalSize = restoreSize
     tween(self.MainFrame, {Size = restoreSize}, 0.3)
     self:_syncMinimizeButtonIcon()
+    self:_syncCollapsedChrome()
     task.delay(0.15, function()
         if self._destroying then
             return
@@ -9428,6 +9586,7 @@ function RemoteSpyUI:_restoreFromMinimized()
             self.ResizeHandle.Visible = true
         end
         self:_syncTitleActions()
+        self:_syncCollapsedChrome()
     end)
 end
 
@@ -9444,7 +9603,8 @@ function RemoteSpyUI:ToggleMinimize()
     self.IsMaximized = false
     self.OriginalSize = self.MainFrame.Size
     self.OriginalPosition = self.MainFrame.Position
-    tween(self.MainFrame, {Size = UDim2.new(0, 300, 0, titleH)}, 0.3)
+    local collapsedW = self:_getCollapsedWindowWidth()
+    tween(self.MainFrame, {Size = UDim2.new(0, collapsedW, 0, titleH)}, 0.3)
     if self.ContentFrame then
         self.ContentFrame.Visible = false
     end
@@ -9454,9 +9614,7 @@ function RemoteSpyUI:ToggleMinimize()
     if self.ResizeHandle then
         self.ResizeHandle.Visible = false
     end
-    if self.TitleActions then
-        self.TitleActions.Visible = false
-    end
+    self:_syncCollapsedChrome()
     self:_syncMinimizeButtonIcon()
 end
 
@@ -9525,17 +9683,18 @@ function RemoteSpyUI:MakeDraggable()
 end
 
 function RemoteSpyUI:MakeResizable()
-    local windowR = Theme.Radius.Window or 16
-    local visualSize = math.max(20, math.floor(windowR * 0.95 + 0.5))
-    local hitPad = 16
-    local clearance = 5
-    local hostSize = visualSize + hitPad * 2
-    local visualOutset = math.floor(visualSize * 0.4 + 0.5) + clearance
-    local outset = visualOutset + hitPad
+    local idleSize = 42
+    local idlePos = UDim2.new(1, 4, 1, 4)
+    local hoverSize = 48
+    local hoverPos = UDim2.new(1, 8, 1, 8)
+    local idleTransparency = 0.55
+    local hoverTransparency = 0
+
+    local hostSize = hoverSize + 16
     local resizeHandle = createInstance("Frame", {
         Name = "ResizeHandle",
         Size = UDim2.new(0, hostSize, 0, hostSize),
-        Position = UDim2.new(1, outset, 1, outset),
+        Position = UDim2.new(1, 10 + 8, 1, 10 + 8),
         AnchorPoint = Vector2.new(1, 1),
         BackgroundTransparency = 1,
         ZIndex = 99,
@@ -9547,13 +9706,13 @@ function RemoteSpyUI:MakeResizable()
     local gripUrl = getAssetImage("resize.png")
     local grip = createInstance("ImageLabel", {
         Name = "Grip",
-        Size = UDim2.new(0, visualSize, 0, visualSize),
-        Position = UDim2.new(1, -hitPad, 1, -hitPad),
+        Size = UDim2.new(0, idleSize, 0, idleSize),
+        Position = idlePos,
         AnchorPoint = Vector2.new(1, 1),
         BackgroundTransparency = 1,
         Image = gripUrl or "",
         ImageColor3 = Color3.new(1, 1, 1),
-        ImageTransparency = 0.7,
+        ImageTransparency = idleTransparency,
         ScaleType = Enum.ScaleType.Fit,
         ZIndex = 100,
         Active = false,
@@ -9569,12 +9728,12 @@ function RemoteSpyUI:MakeResizable()
         end
         local pad = absSize.X * (6 / 64)
         local midR = absSize.X * (36 / 64)
-        local halfStroke = math.max(14, absSize.X * 0.55)
+        local halfStroke = math.max(16, absSize.X * 0.55)
         local cx = absPos.X + pad
         local cy = absPos.Y + pad
         local dx = screenX - cx
         local dy = screenY - cy
-        if dx < -hitPad or dy < -hitPad then
+        if dx < -12 or dy < -12 then
             return false
         end
         local dist = math.sqrt(dx * dx + dy * dy)
@@ -9594,7 +9753,14 @@ function RemoteSpyUI:MakeResizable()
         if resizing then
             return
         end
-        tween(grip, {ImageTransparency = on and 0.25 or 0.75}, on and 0.1 or 0.17)
+        local size = on and hoverSize or idleSize
+        local pos = on and hoverPos or idlePos
+        local transparency = on and hoverTransparency or idleTransparency
+        tween(grip, {
+            Size = UDim2.new(0, size, 0, size),
+            Position = pos,
+            ImageTransparency = transparency,
+        }, on and 0.12 or 0.18)
     end
 
     self:_trackConnection(UserInputService.InputBegan:Connect(function(input)
@@ -9614,7 +9780,11 @@ function RemoteSpyUI:MakeResizable()
         resizing = true
         resizeStart = input.Position
         startSize = self.MainFrame.Size
-        tween(grip, {ImageTransparency = 0.2}, 0.1)
+        tween(grip, {
+            Size = UDim2.new(0, hoverSize, 0, hoverSize),
+            Position = hoverPos,
+            ImageTransparency = hoverTransparency,
+        }, 0.1)
     end))
 
     self:_trackConnection(UserInputService.InputChanged:Connect(function(input)
@@ -9654,8 +9824,15 @@ function RemoteSpyUI:MakeResizable()
         end
         resizing = false
         local stillOn = pointOnCornerArc(input.Position.X, input.Position.Y)
-        tween(grip, {ImageTransparency = stillOn and 0.25 or 0.75}, 0.17)
         hovering = stillOn
+        local size = stillOn and hoverSize or idleSize
+        local pos = stillOn and hoverPos or idlePos
+        local transparency = stillOn and hoverTransparency or idleTransparency
+        tween(grip, {
+            Size = UDim2.new(0, size, 0, size),
+            Position = pos,
+            ImageTransparency = transparency,
+        }, 0.18)
         if not self._destroying then
             self:SaveWindowGeometry()
         end

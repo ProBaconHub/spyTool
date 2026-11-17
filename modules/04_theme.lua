@@ -34,14 +34,17 @@ local Theme = {
     Shadow = Color3.fromRGB(0, 0, 0),
     
     
+    -- Title bar is short; Window slice margin is 512px in-asset with shapeRadius 310.
+    -- Keep Window radius so 512 * (Window / 310) <= TitleBarHeight, otherwise the
+    -- title cap squashes and MainFrame (tall enough) draws a larger corner.
+    TitleBarHeight = 36,
     Radius = {
-        Window = 30,
+        Window = 21, -- floor(TitleBarHeight * 310 / 512); matches title-cap corner size
         Large = 15,
         Medium = 12,
         Small = 9,
         Chip = 12,
     },
-    TitleBarHeight = 36,
     
     
     CornerRadius = UDim.new(0, 12),

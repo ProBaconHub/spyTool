@@ -582,11 +582,11 @@ local function isHookfunctionSupported()
     return hookfunctionSupportCache
 end
 
-local function appendInterceptHookHeader(lines, usesHookfunction)
-    if usesHookfunction then
-        table.insert(lines, "-- Intercept uses hookfunction")
-    else
-        table.insert(lines, "-- hookfunction unavailable on this executor; using direct replacement / wrapper fallback")
-    end
-    table.insert(lines, "")
+local function isHookmetamethodSupported()
+    return type(safeHookmetamethod) == "function"
+        or type(hookmetamethod) == "function"
+end
+
+local function appendInterceptHookHeader(lines, mode)
+    -- Empty
 end

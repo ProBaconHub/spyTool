@@ -138,23 +138,25 @@ local SquircleShapeDefs = {
         Rect = Rect.new(512, 0, 512, 0),
         Radius = 310,
     },
+    -- Match TitleBarFill (Window-TL-TR): same slice margins so MainFrame corners
+    -- render with the same painted radius as the title cap.
     Window = {
-        File = "squircle/squircle.png",
-        Rect = Rect.new(460, 460, 460, 460),
+        File = "squircle/window.png",
+        Rect = Rect.new(512, 512, 512, 512),
         Radius = 310,
     },
     WindowOutline = {
-        File = "squircle/squircle-outline.png",
+        File = "squircle/window-outline.png",
         Rect = Rect.new(512, 512, 512, 512),
         Radius = 310,
     },
     ["Window-TL-TR"] = {
-        File = "squircle/squircle-tl-tr.png",
+        File = "squircle/window-tl-tr.png",
         Rect = Rect.new(512, 512, 512, 512),
         Radius = 310,
     },
     ["Window-BL-BR"] = {
-        File = "squircle/squircle-bl-br.png",
+        File = "squircle/window-bl-br.png",
         Rect = Rect.new(512, 0, 512, 0),
         Radius = 310,
     },
@@ -1388,7 +1390,8 @@ local function buildPathFromDottedName(fullName)
     if #parts == 0 then
         return nil
     end
-    local expr = 'game:GetService("' .. parts[1] .. '")'
+    local root = parts[1]:gsub("\\", "\\\\"):gsub('"', '\\"')
+    local expr = '(game:FindService("' .. root .. '") or game:FindFirstChild("' .. root .. '"))'
     for i = 2, #parts do
         local part = parts[i]
         if part:match("^[%a_][%w_]*$") then
@@ -1696,8 +1699,10 @@ end
 
 local function snapshotArguments(args, eager)
     local snapshots = {}
-    for i, v in ipairs(args) do
-        snapshots[i] = captureArgumentSnapshot(v, 0, eager)
+    local n = (type(args) == "table" and (args.n or #args)) or 0
+    snapshots.n = n
+    for i = 1, n do
+        snapshots[i] = captureArgumentSnapshot(args[i], 0, eager)
     end
     return snapshots
 end
@@ -1906,19 +1911,22 @@ end
 
 local function hashArgs(args)
     local parts = {}
-    for i, v in ipairs(args) do
+    local n = (type(args) == "table" and (args.n or #args)) or 0
+    for i = 1, n do
         if i > 1 then
             parts[#parts + 1] = "||"
         end
-        appendFingerprint(parts, v, 0, {})
+        appendFingerprint(parts, args[i], 0, {})
     end
     return table.concat(parts)
 end
 
 local function shallowCopyArgs(args)
-    local copy = {}
-    for i, v in ipairs(args) do
-        copy[i] = v
+    local n = (type(args) == "table" and (args.n or #args)) or 0
+    local copy = table.create(n)
+    copy.n = n
+    for i = 1, n do
+        copy[i] = args[i]
     end
     return copy
 end

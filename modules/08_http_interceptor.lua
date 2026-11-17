@@ -928,88 +928,81 @@ function HttpInterceptor:InstallHooks()
             setnamecallmethod(method)
             return oldNamecall(obj, ...)
         end
-        local className = obj.ClassName
-        local args = {...}
 
-        if method == "FireServer" then
-            if className == "RemoteEvent" then
-                local path, blocked, argHash, ignored = RemoteScanner:PrepareOutgoing(obj, args)
-                if not ignored then
-                    local callerFunc = nil
-                    pcall(function() callerFunc = debug.info(2, "f") end)
-                    if blocked then
-                        RemoteScanner:QueueLog(obj, "RemoteEvent", args, callerFunc, nil, false, true, path, nil, argHash)
-                        return RemoteScanner:GetBypassReturn(path, args, argHash)
-                    end
-                    RemoteScanner:QueueLog(obj, "RemoteEvent", args, callerFunc, nil, false, false, path, nil, argHash)
-                end
-                setnamecallmethod(method)
-                return oldNamecall(obj, ...)
-            elseif className == "UnreliableRemoteEvent" then
-                local path, blocked, argHash, ignored = RemoteScanner:PrepareOutgoing(obj, args)
-                if not ignored then
-                    if blocked then
-                        RemoteScanner:QueueLog(obj, "UnreliableRemoteEvent", args, nil, nil, false, true, path, nil, argHash)
-                        return RemoteScanner:GetBypassReturn(path, args, argHash)
-                    end
-                    RemoteScanner:QueueLog(obj, "UnreliableRemoteEvent", args, nil, nil, false, false, path, nil, argHash)
-                end
-                setnamecallmethod(method)
-                return oldNamecall(obj, ...)
-            end
+        local className = obj.ClassName
+        local remoteType = nil
+        if method == "FireServer" and (className == "RemoteEvent" or className == "UnreliableRemoteEvent") then
+            remoteType = className
         elseif method == "InvokeServer" and className == "RemoteFunction" then
-            local path, blocked, argHash, ignored = RemoteScanner:PrepareOutgoing(obj, args)
-            if not ignored then
-                local callerFunc = nil
-                pcall(function() callerFunc = debug.info(2, "f") end)
-                if blocked then
-                    RemoteScanner:QueueLog(obj, "RemoteFunction", args, callerFunc, nil, false, true, path, nil, argHash)
-                    return RemoteScanner:GetBypassReturn(path, args, argHash)
-                end
-                setnamecallmethod(method)
-                local results = {oldNamecall(obj, ...)}
-                RemoteScanner:QueueLog(obj, "RemoteFunction", args, callerFunc, results[1], false, false, path, nil, argHash)
-                return unpack(results)
-            end
-            setnamecallmethod(method)
-            return oldNamecall(obj, ...)
+            remoteType = className
         elseif method == "Fire" and className == "BindableEvent" then
-            local path, blocked, argHash, ignored = RemoteScanner:PrepareOutgoing(obj, args)
-            if not ignored then
-                if blocked then
-                    RemoteScanner:QueueLog(obj, "BindableEvent", args, nil, nil, false, true, path, nil, argHash)
-                    return RemoteScanner:GetBypassReturn(path, args, argHash)
-                end
-                RemoteScanner:QueueLog(obj, "BindableEvent", args, nil, nil, false, false, path, nil, argHash)
-            end
-            setnamecallmethod(method)
-            return oldNamecall(obj, ...)
+            remoteType = className
         elseif method == "Invoke" and className == "BindableFunction" then
+            remoteType = className
+        end
+
+        if remoteType then
+            local args = table.pack(...)
             local path, blocked, argHash, ignored = RemoteScanner:PrepareOutgoing(obj, args)
+            local returnsValue = method == "InvokeServer" or method == "Invoke"
             if not ignored then
+                local callerFunc = RemoteScanner.CaptureCallerFunction and RemoteScanner.CaptureCallerFunction() or nil
                 if blocked then
-                    RemoteScanner:QueueLog(obj, "BindableFunction", args, nil, nil, false, true, path, nil, argHash)
-                    return RemoteScanner:GetBypassReturn(path, args, argHash)
+                    RemoteScanner:QueueLog(obj, remoteType, args, callerFunc, nil, false, true, path, nil, argHash)
+                    if returnsValue then
+                        return RemoteScanner:GetBypassReturn(path, args, argHash)
+                    end
+                    return
                 end
-                setnamecallmethod(method)
-                local results = {oldNamecall(obj, ...)}
-                RemoteScanner:QueueLog(obj, "BindableFunction", args, nil, results[1], false, false, path, nil, argHash)
-                return unpack(results)
+                if returnsValue then
+                    setnamecallmethod(method)
+                    local results = table.pack(oldNamecall(obj, table.unpack(args, 1, args.n)))
+                    RemoteScanner:QueueLog(obj, remoteType, args, callerFunc, results[1], false, false, path, nil, argHash)
+                    return table.unpack(results, 1, results.n)
+                end
+                RemoteScanner:QueueLog(obj, remoteType, args, callerFunc, nil, false, false, path, nil, argHash)
             end
             setnamecallmethod(method)
-            return oldNamecall(obj, ...)
+            return oldNamecall(obj, table.unpack(args, 1, args.n))
         end
 
         setnamecallmethod(method)
         return oldNamecall(obj, ...)
     end)
+
+    local function wrapRemoteIndexMethod(remote, methodName, remoteType, rawMethod)
+        return SpyStealth:WrapCClosure(function(self, ...)
+            if self ~= remote then
+                return rawMethod(self, ...)
+            end
+            if not RemoteScanner.IsSpying then
+                return rawMethod(self, ...)
+            end
+            local args = table.pack(...)
+            local path, blocked, argHash, ignored = RemoteScanner:PrepareOutgoing(self, args)
+            local returnsValue = methodName == "InvokeServer" or methodName == "Invoke"
+            if not ignored then
+                local callerFunc = RemoteScanner.CaptureCallerFunction and RemoteScanner.CaptureCallerFunction() or nil
+                if blocked then
+                    RemoteScanner:QueueLog(self, remoteType, args, callerFunc, nil, false, true, path, nil, argHash)
+                    if returnsValue then
+                        return RemoteScanner:GetBypassReturn(path, args, argHash)
+                    end
+                    return
+                end
+                if returnsValue then
+                    local results = table.pack(rawMethod(self, table.unpack(args, 1, args.n)))
+                    RemoteScanner:QueueLog(self, remoteType, args, callerFunc, results[1], false, false, path, nil, argHash)
+                    return table.unpack(results, 1, results.n)
+                end
+                RemoteScanner:QueueLog(self, remoteType, args, callerFunc, nil, false, false, path, nil, argHash)
+            end
+            return rawMethod(self, table.unpack(args, 1, args.n))
+        end)
+    end
     
     local oldIndex
     oldIndex = SpyStealth:HookMetamethod(game, "__index", function(obj, key)
-        
-        
-        
-        
         if (not httpSpy.IsHooked) or httpSpy._shuttingDown then
             return oldIndex(obj, key)
         end
@@ -1024,7 +1017,30 @@ function HttpInterceptor:InstallHooks()
                 return httpPostAsyncProxy
             end
         end
-        return oldIndex(obj, key)
+
+        local value = oldIndex(obj, key)
+        if RemoteScanner.IsSpying
+            and typeof(obj) == "Instance"
+            and type(key) == "string"
+            and type(value) == "function"
+            and REMOTE_METHODS[key]
+        then
+            local className = obj.ClassName
+            local remoteType = nil
+            if key == "FireServer" and (className == "RemoteEvent" or className == "UnreliableRemoteEvent") then
+                remoteType = className
+            elseif key == "InvokeServer" and className == "RemoteFunction" then
+                remoteType = className
+            elseif key == "Fire" and className == "BindableEvent" then
+                remoteType = className
+            elseif key == "Invoke" and className == "BindableFunction" then
+                remoteType = className
+            end
+            if remoteType then
+                return wrapRemoteIndexMethod(obj, key, remoteType, value)
+            end
+        end
+        return value
     end)
     
     local requestProxy = SpyStealth:WrapCClosure(function(options)

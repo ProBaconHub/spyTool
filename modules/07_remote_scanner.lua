@@ -11,7 +11,7 @@ local RemoteScanner = {
     MaxLogsPerRemote = 200,
     MaxLogsPerArgGroup = 50,
     
-    SortMode = "latest", 
+    SortMode = "calls", 
     
     EnabledFilters = {
         RemoteEvent = true,
@@ -51,10 +51,82 @@ local RemoteScanner = {
 }
 
 function RemoteScanner:GetConnections(signal)
-    if safeGetconnections then
-        return safeGetconnections(signal)
+    if type(safeGetconnections) == "function" and signal ~= nil then
+        local ok, connections = pcall(safeGetconnections, signal)
+        if ok and type(connections) == "table" then
+            return connections
+        end
     end
     return {}
+end
+
+local function isBindableType(remoteType)
+    return remoteType == "BindableEvent" or remoteType == "BindableFunction"
+end
+
+local function isDirectionalType(remoteType)
+    return remoteType == "RemoteEvent"
+        or remoteType == "UnreliableRemoteEvent"
+        or remoteType == "RemoteFunction"
+end
+
+function RemoteScanner:RefreshConnectionInfo(data)
+    if not data or typeof(data.Instance) ~= "Instance" then
+        return data
+    end
+    local remote = data.Instance
+    local connections = {}
+    local listeners = {}
+    if data.Type == "RemoteEvent" or data.Type == "UnreliableRemoteEvent" then
+        connections = self:GetConnections(remote.OnClientEvent)
+    elseif data.Type == "BindableEvent" then
+        connections = self:GetConnections(remote.Event)
+    end
+    for index, connection in ipairs(connections) do
+        local fn = connection and connection.Function
+        local listener = {
+            Index = index,
+            Enabled = connection.Enabled,
+            ForeignState = connection.ForeignState,
+            Function = typeof(fn) == "function" and fn or nil,
+            Info = nil,
+        }
+        if typeof(fn) == "function" then
+            listener.Info = FunctionAnalyzer:GetInfo(fn)
+        end
+        listeners[#listeners + 1] = listener
+    end
+    data.Connections = connections
+    data.Listeners = listeners
+    data.ConnectionCount = #listeners
+    return data
+end
+
+function RemoteScanner.CaptureCallerFunction()
+    local rawInfo = (SpyStealth and SpyStealth.DebugInfoBypass) or debug.info
+    if type(rawInfo) ~= "function" then
+        return nil
+    end
+    -- pcall(rawInfo, level, "f") makes level 1 = CaptureCallerFunction.
+    -- Skip our own frames / chunk, then return the first real game caller.
+    for level = 2, 18 do
+        local ok, fn = pcall(rawInfo, level, "f")
+        if not ok or typeof(fn) ~= "function" then
+            break
+        end
+        local okSrc, source = pcall(rawInfo, fn, "s")
+        source = (okSrc and source) or ""
+        if type(source) == "string" then
+            local lower = source:lower()
+            local isInternal = source == ""
+                or lower:find("spytool", 1, true) ~= nil
+                or lower:find("probaconhub", 1, true) ~= nil
+            if not isInternal then
+                return fn
+            end
+        end
+    end
+    return nil
 end
 
 function RemoteScanner:QueueLog(remote, remoteType, args, callerFunc, returnValue, isIncoming, blocked, pathHint, nameHint, argHashHint)
@@ -77,12 +149,14 @@ function RemoteScanner:QueueLog(remote, remoteType, args, callerFunc, returnValu
     if not self.EnabledFilters[baseType] then
         return nil
     end
-    if isIncoming then
-        if not self.DirectionFilters.Incoming then
+    if isDirectionalType(baseType) then
+        if isIncoming then
+            if not self.DirectionFilters.Incoming then
+                return nil
+            end
+        elseif not self.DirectionFilters.Outgoing then
             return nil
         end
-    elseif not self.DirectionFilters.Outgoing then
-        return nil
     end
 
     local argHash = argHashHint
@@ -214,45 +288,63 @@ function RemoteScanner:GetAllRemotes()
 end
 
 function RemoteScanner:Scan()
-    self.FoundRemotes = {}
-    self.GroupedLogs = {}
-    
     local remotes = self:GetAllRemotes()
-    
+    local nextFound = {}
+
     for _, data in ipairs(remotes) do
         local remote = data.Instance
         local remoteType = data.Type
         local path = getCachedInstancePath(remote)
-        local connections = {}
-        
-        if remoteType == "RemoteEvent" then
-            connections = self:GetConnections(remote.OnClientEvent)
-        elseif remoteType == "UnreliableRemoteEvent" then
-            connections = self:GetConnections(remote.OnClientEvent)
-        elseif remoteType == "BindableEvent" then
-            connections = self:GetConnections(remote.Event)
-        end
-        
-        self.FoundRemotes[path] = {
+
+        local remoteInfo = {
             Instance = remote,
             Path = path,
             Name = remote.Name,
             Type = remoteType,
-            ConnectionCount = #connections,
-            Connections = connections,
+            ConnectionCount = 0,
+            Connections = {},
+            Listeners = {},
         }
-        
-        self.GroupedLogs[path] = {
-            Info = self.FoundRemotes[path],
-            ArgGroups = {},  
-            TotalCalls = 0,
-            FirstCall = nil,
-            LastCall = nil,
-            Expanded = false,
-        }
+        self:RefreshConnectionInfo(remoteInfo)
+        nextFound[path] = remoteInfo
+
+        local group = self.GroupedLogs[path]
+        if group then
+            group.Info = remoteInfo
+        else
+            self.GroupedLogs[path] = {
+                Info = remoteInfo,
+                ArgGroups = {},
+                TotalCalls = 0,
+                FirstCall = nil,
+                LastCall = nil,
+                LastCallTick = 0,
+                Expanded = false,
+            }
+        end
     end
-    
+
+    self.FoundRemotes = nextFound
+
+    -- Rescan while spying must re-arm hooks for newly discovered remotes.
+    if self.IsSpying then
+        self:RebindIncomingHooks()
+    end
+
     return self.FoundRemotes
+end
+
+function RemoteScanner:RebindIncomingHooks()
+    local hook = self._hookIncoming
+    if type(hook) ~= "function" or not self.IsSpying then
+        return
+    end
+    for path, data in pairs(self.FoundRemotes) do
+        pcall(hook, data.Instance, data, path)
+        if self.BlockedInstances[path] then
+            self:ApplyIncomingBlockState(path)
+        end
+    end
 end
 
 function RemoteScanner:WithIncomingLogSuppressed(callback)
@@ -355,10 +447,16 @@ function RemoteScanner:RestoreIncomingHooks()
         local data = self.FoundRemotes[path]
         if data and data.Instance and backup then
             pcall(function()
-                if backup.Type == "OnClientInvoke" then
-                    data.Instance.OnClientInvoke = backup.Original
-                elseif backup.Type == "OnInvoke" then
-                    data.Instance.OnInvoke = backup.Original
+                local property = backup.Property
+                    or (backup.Type == "OnClientInvoke" and "OnClientInvoke")
+                    or (backup.Type == "OnInvoke" and "OnInvoke")
+                if property and data.Instance[property] == backup.Wrapper then
+                    data.Instance[property] = backup.Original
+                elseif property and backup.Original ~= nil then
+                    -- Only restore if still our wrapper or original was non-nil.
+                    if data.Instance[property] == backup.Wrapper then
+                        data.Instance[property] = backup.Original
+                    end
                 end
             end)
         end
@@ -376,6 +474,8 @@ function RemoteScanner:CreateLog(remote, remoteType, args, callerFunc, returnVal
     local argHash = (queuedInfo and queuedInfo.ArgHash) or hashArgs(args)
     
     local baseType = remoteType:gsub(" %(Incoming%)", "")
+    local bindable = isBindableType(baseType)
+    local directional = isDirectionalType(baseType)
     
     
     if self.IgnoredInstances[path] then
@@ -390,17 +490,23 @@ function RemoteScanner:CreateLog(remote, remoteType, args, callerFunc, returnVal
         return nil
     end
     
-    if isIncoming and not self.DirectionFilters.Incoming then
-        return nil
-    end
-    if not isIncoming and not self.DirectionFilters.Outgoing then
-        return nil
+    if directional then
+        if isIncoming and not self.DirectionFilters.Incoming then
+            return nil
+        end
+        if not isIncoming and not self.DirectionFilters.Outgoing then
+            return nil
+        end
     end
     
     local now = tick()
     local timestamp = getTimestamp()
     
-    local displayType = isIncoming and (baseType .. " (Incoming)") or baseType
+    -- Bindables are local signals/calls — never label them Incoming/Outgoing.
+    local displayType = baseType
+    if directional and isIncoming then
+        displayType = baseType .. " (Incoming)"
+    end
     
     self.TotalLogCount = (self.TotalLogCount or 0) + 1
 
@@ -419,29 +525,37 @@ function RemoteScanner:CreateLog(remote, remoteType, args, callerFunc, returnVal
         RemoteType = displayType,
         Arguments = argsCopy,
         CachedArguments = cachedArguments,
-        ArgumentCount = #args,
+        ArgumentCount = (type(args) == "table" and (args.n or #args)) or 0,
         ArgHash = argHash,
         CallerFunction = callerFunc,
         CallerInfo = nil, 
         ReturnValue = returnValue,
-        Blocked = false,
-        IsIncoming = isIncoming or false,
+        Blocked = (queuedInfo and queuedInfo.Blocked) == true,
+        IsIncoming = (not bindable) and (isIncoming or false) or false,
+        IsBindable = bindable,
     }
     
     if not self.GroupedLogs[path] then
-        self.GroupedLogs[path] = {
-            Info = self.FoundRemotes[path] or {
+        local info = self.FoundRemotes[path]
+        if not info then
+            info = {
                 Instance = remote,
                 Path = path,
                 Name = remoteName,
                 Type = baseType,
                 ConnectionCount = 0,
                 Connections = {},
-            },
+                Listeners = {},
+            }
+            self:RefreshConnectionInfo(info)
+        end
+        self.GroupedLogs[path] = {
+            Info = info,
             ArgGroups = {},
             TotalCalls = 0,
             FirstCall = nil,
             LastCall = nil,
+            LastCallTick = 0,
             Expanded = false,
         }
     end
@@ -450,6 +564,7 @@ function RemoteScanner:CreateLog(remote, remoteType, args, callerFunc, returnVal
     
     group.TotalCalls = group.TotalCalls + 1
     group.LastCall = timestamp
+    group.LastCallTick = now
     if not group.FirstCall then
         group.FirstCall = now
     end
@@ -463,6 +578,7 @@ function RemoteScanner:CreateLog(remote, remoteType, args, callerFunc, returnVal
             Count = 0,
             FirstCall = now,
             LastCall = nil,
+            LastCallTick = 0,
             Expanded = false,
             HasIncoming = false,
             HasOutgoing = false,
@@ -473,21 +589,24 @@ function RemoteScanner:CreateLog(remote, remoteType, args, callerFunc, returnVal
     local argGroup = group.ArgGroups[argHash]
     argGroup.CachedArgs = cachedArguments
     
-    if isIncoming then
-        argGroup.HasIncoming = true
-        group.HasIncomingLogs = true
-    else
-        argGroup.HasOutgoing = true
-        group.HasOutgoingLogs = true
+    if directional then
+        if isIncoming then
+            argGroup.HasIncoming = true
+            group.HasIncomingLogs = true
+        else
+            argGroup.HasOutgoing = true
+            group.HasOutgoingLogs = true
+        end
     end
     
     table.insert(argGroup.Logs, 1, log)
     argGroup.Count = argGroup.Count + 1
     argGroup.LastCall = timestamp
+    argGroup.LastCallTick = now
     
-    if self.SortMode == "calls" then
-        group._argGroupsDirty = true
-    end
+    -- Latest sort depends on LastCallTick; keep cache fresh for both modes.
+    group._argGroupsDirty = true
+    group._sortedArgGroupsCache = nil
     
     if #argGroup.Logs > self.MaxLogsPerArgGroup then
         table.remove(argGroup.Logs)
@@ -565,6 +684,7 @@ function RemoteScanner:GetSortedGroups()
                 Path = path,
                 Group = group,
                 FirstCall = group.FirstCall or 0,
+                LastCallTick = group.LastCallTick or group.FirstCall or 0,
                 TotalCalls = group.TotalCalls,
             })
         end
@@ -590,11 +710,16 @@ function RemoteScanner:GetSortedArgGroups(path)
     if group._sortedArgGroupsCache and not group._argGroupsDirty then
         return group._sortedArgGroupsCache
     end
+
+    local infoType = group.Info and group.Info.Type or ""
+    local bindable = isBindableType(infoType)
     
     local argGroups = {}
     for argHash, argGroup in pairs(group.ArgGroups) do
         local hasVisibleLog = false
-        if self.DirectionFilters.Incoming and self.DirectionFilters.Outgoing then
+        if bindable then
+            hasVisibleLog = argGroup.Count > 0
+        elseif self.DirectionFilters.Incoming and self.DirectionFilters.Outgoing then
             hasVisibleLog = argGroup.Count > 0
         elseif argGroup.HasIncoming and argGroup.HasOutgoing then
             hasVisibleLog = (self.DirectionFilters.Incoming or self.DirectionFilters.Outgoing)
@@ -609,6 +734,7 @@ function RemoteScanner:GetSortedArgGroups(path)
                 ArgHash = argHash,
                 ArgGroup = argGroup,
                 FirstCall = argGroup.FirstCall or 0,
+                LastCallTick = argGroup.LastCallTick or argGroup.FirstCall or 0,
                 Count = argGroup.Count,
             })
         end
@@ -633,12 +759,15 @@ function RemoteScanner:ShouldBlock(path, args, argHash)
     if self.BlockedInstances[path] then
         return true
     end
-    
+
     local blockedArgs = self.BlockedArgs[path]
     if not blockedArgs then
         return false
     end
-    local hash = argHash or hashArgs(args)
+    local hash = argHash or (args and hashArgs(args)) or nil
+    if not hash then
+        return false
+    end
     return blockedArgs[hash] == true
 end
 
@@ -646,27 +775,68 @@ function RemoteScanner:GetBypassReturn(path, args, argHash)
     if not self.ReturnBypassEnabled then
         return nil
     end
-    
+
     local cached = self.CachedReturns[path]
     if not cached then
         return nil
     end
-    local hash = argHash or hashArgs(args)
+    local hash = argHash or (args and hashArgs(args)) or nil
+    if not hash then
+        return nil
+    end
     return cached[hash]
 end
 
 function RemoteScanner:PrepareOutgoing(remote, args)
     local path = getCachedInstancePath(remote)
     if self.IgnoredInstances[path] then
-        return path, false, nil, true 
+        return path, false, nil, true
     end
     local needsHash = (self.BlockedArgs[path] ~= nil)
         or (self.IgnoredArgs[path] ~= nil)
         or self.ReturnBypassEnabled
     local argHash = needsHash and hashArgs(args) or nil
-    local blocked = self.BlockedInstances[path] == true
-        or (argHash ~= nil and self.BlockedArgs[path] and self.BlockedArgs[path][argHash] == true)
+    local blocked = self:ShouldBlock(path, args, argHash)
     return path, blocked, argHash, false
+end
+
+function RemoteScanner:ApplyIncomingBlockState(path)
+    local data = self.FoundRemotes[path]
+    if not data or typeof(data.Instance) ~= "Instance" then
+        return
+    end
+    local blocked = self.BlockedInstances[path] == true
+    local remote = data.Instance
+    local signal
+    if data.Type == "RemoteEvent" or data.Type == "UnreliableRemoteEvent" then
+        signal = remote.OnClientEvent
+    elseif data.Type == "BindableEvent" then
+        signal = remote.Event
+    else
+        return
+    end
+
+    local spyConns = {}
+    local state = self.RemoteConnectionStates and self.RemoteConnectionStates[remote]
+    if state and state.Connections then
+        for _, conn in ipairs(state.Connections) do
+            spyConns[conn] = true
+        end
+    end
+
+    for _, connection in ipairs(self:GetConnections(signal)) do
+        if not spyConns[connection] then
+            pcall(function()
+                if blocked then
+                    if connection.Disable then
+                        connection:Disable()
+                    end
+                elseif connection.Enable then
+                    connection:Enable()
+                end
+            end)
+        end
+    end
 end
 
 function RemoteScanner:StartSpying()
@@ -719,70 +889,143 @@ function RemoteScanner:StartSpying()
     end
     
     
+    local function installCallbackHook(remote, data, path, propertyName, backupType)
+        local scanner = self
+        local remoteName = remote.Name
+        local function makeWrapper(currentOriginal)
+            local wrapper
+            wrapper = function(...)
+                local backup = scanner.HookBackups[path]
+                local original = currentOriginal
+                if backup then
+                    original = backup.Original or currentOriginal
+                end
+                local args = table.pack(...)
+                local blocked = scanner:ShouldBlock(path, args)
+                if scanner.IsSpying and (scanner.IncomingLogSuppressDepth or 0) == 0 then
+                    -- RemoteFunction is directional incoming; BindableFunction is local.
+                    local asIncoming = data.Type == "RemoteFunction"
+                    scanner:QueueLog(
+                        remote,
+                        data.Type,
+                        args,
+                        nil,
+                        nil,
+                        asIncoming,
+                        blocked,
+                        path,
+                        remoteName
+                    )
+                end
+                if blocked then
+                    return scanner:GetBypassReturn(path, args)
+                end
+                if type(original) == "function" then
+                    return original(table.unpack(args, 1, args.n))
+                end
+            end
+            return wrapper
+        end
+
+        local original = remote[propertyName]
+        local wrapper = makeWrapper(original)
+        self.HookBackups[path] = {
+            Type = backupType,
+            Original = original,
+            Wrapper = wrapper,
+            Property = propertyName,
+        }
+        remote[propertyName] = wrapper
+    end
+
     local function hookIncoming(remote, data, path)
         if not remote or not remote.Parent then
             return
         end
         local state = ensureRemoteState(remote, path)
-        
         local remoteName = remote.Name
+
+        -- BindableEvent: no incoming/outgoing taps. Listeners are listed in info.
+        if data.Type == "BindableEvent" then
+            self:RefreshConnectionInfo(data)
+            return
+        end
+
         if data.Type == "RemoteEvent" or data.Type == "UnreliableRemoteEvent" then
+            if state.IncomingConnected then
+                return
+            end
+            local signal = remote.OnClientEvent
             local success, conn = pcall(function()
-                return remote.OnClientEvent:Connect(function(...)
-                    if not self.IsSpying then return end
-                    self:QueueLog(remote, data.Type, {...}, nil, nil, true, false, path, remoteName)
+                return signal:Connect(function(...)
+                    if not self.IsSpying then
+                        return
+                    end
+                    local args = table.pack(...)
+                    local blocked = self:ShouldBlock(path, args)
+                    self:QueueLog(remote, data.Type, args, nil, nil, true, blocked, path, remoteName)
+                    if blocked then
+                        -- Other listeners are disabled via ApplyIncomingBlockState when instance-blocked.
+                        return
+                    end
                 end)
             end)
             if success and conn then
                 state.Connections[#state.Connections + 1] = conn
-            end
-        elseif data.Type == "BindableEvent" then
-            local success, conn = pcall(function()
-                return remote.Event:Connect(function(...)
-                    if not self.IsSpying then return end
-                    self:QueueLog(remote, data.Type, {...}, nil, nil, true, false, path, remoteName)
+                state.IncomingConnected = true
+                -- Keep our spy connection enabled if the executor exposes Enable.
+                pcall(function()
+                    if conn.Enable then
+                        conn:Enable()
+                    end
                 end)
-            end)
-            if success and conn then
-                state.Connections[#state.Connections + 1] = conn
             end
-        elseif data.Type == "RemoteFunction" and not self.HookBackups[path] then
-            local original = remote.OnClientInvoke
-            self.HookBackups[path] = {
-                Type = "OnClientInvoke",
-                Original = original,
-            }
-            local scanner = self
-            remote.OnClientInvoke = function(...)
-                if scanner.IsSpying and (scanner.IncomingLogSuppressDepth or 0) == 0 then
-                    scanner:QueueLog(remote, data.Type, {...}, nil, nil, true, false, path, remoteName)
-                end
-                if type(original) == "function" then
-                    return original(...)
-                end
+            self:RefreshConnectionInfo(data)
+        elseif data.Type == "RemoteFunction" then
+            local backup = self.HookBackups[path]
+            if not (backup and remote.OnClientInvoke == backup.Wrapper) then
+                installCallbackHook(remote, data, path, "OnClientInvoke", "OnClientInvoke")
             end
-        elseif data.Type == "BindableFunction" and not self.HookBackups[path] then
-            local original = remote.OnInvoke
-            self.HookBackups[path] = {
-                Type = "OnInvoke",
-                Original = original,
-            }
-            local scanner = self
-            remote.OnInvoke = function(...)
-                if scanner.IsSpying and (scanner.IncomingLogSuppressDepth or 0) == 0 then
-                    scanner:QueueLog(remote, data.Type, {...}, nil, nil, true, false, path, remoteName)
-                end
-                if type(original) == "function" then
-                    return original(...)
-                end
+        elseif data.Type == "BindableFunction" then
+            local backup = self.HookBackups[path]
+            if not (backup and remote.OnInvoke == backup.Wrapper) then
+                installCallbackHook(remote, data, path, "OnInvoke", "OnInvoke")
             end
         end
     end
+
+    self._hookIncoming = hookIncoming
     
     
     for path, data in pairs(self.FoundRemotes) do
         hookIncoming(data.Instance, data, path)
+        if self.BlockedInstances[path] then
+            self:ApplyIncomingBlockState(path)
+        end
     end
+
+    -- Re-apply callback hooks if games overwrite OnClientInvoke / OnInvoke after us.
+    local maintainConn = RunService.Heartbeat:Connect(function()
+        if not self.IsSpying then
+            return
+        end
+        self._incomingMaintainAccum = (self._incomingMaintainAccum or 0) + 1
+        if self._incomingMaintainAccum < 30 then
+            return
+        end
+        self._incomingMaintainAccum = 0
+        for path, data in pairs(self.FoundRemotes) do
+            if data.Type == "RemoteFunction" or data.Type == "BindableFunction" then
+                local backup = self.HookBackups[path]
+                local property = data.Type == "RemoteFunction" and "OnClientInvoke" or "OnInvoke"
+                local current = data.Instance and data.Instance[property]
+                if not backup or current ~= backup.Wrapper then
+                    hookIncoming(data.Instance, data, path)
+                end
+            end
+        end
+    end)
+    table.insert(self.SpyConnections, maintainConn)
     
     
     
@@ -807,21 +1050,16 @@ function RemoteScanner:StartSpying()
                 local path = getCachedInstancePath(descendant)
                 local existing = self.FoundRemotes[path]
                 if not existing or existing.Instance ~= descendant then
-                    local connections = {}
-                    if remoteType == "RemoteEvent" or remoteType == "UnreliableRemoteEvent" then
-                        connections = self:GetConnections(descendant.OnClientEvent)
-                    elseif remoteType == "BindableEvent" then
-                        connections = self:GetConnections(descendant.Event)
-                    end
-                    
                     local data = {
                         Instance = descendant,
                         Path = path,
                         Name = descendant.Name,
                         Type = remoteType,
-                        ConnectionCount = #connections,
-                        Connections = connections,
+                        ConnectionCount = 0,
+                        Connections = {},
+                        Listeners = {},
                     }
+                    self:RefreshConnectionInfo(data)
                     self.FoundRemotes[path] = data
                     
                     if not self.GroupedLogs[path] then
@@ -988,6 +1226,7 @@ end
 
 function RemoteScanner:SetBlockInstance(path, block)
     self.BlockedInstances[path] = block or nil
+    self:ApplyIncomingBlockState(path)
     if self.OnFiltersChanged then
         task.defer(self.OnFiltersChanged)
     end
@@ -1008,7 +1247,8 @@ function RemoteScanner:FireRemote(log)
     if not log or not log.Remote then return false end
     
     local remote = log.Remote
-    local args = log.Arguments
+    local args = log.Arguments or {}
+    local argc = args.n or log.ArgumentCount or #args
     local remoteType = log.RemoteType:gsub(" %(Incoming%)", "")
     local isIncoming = log.IsIncoming
     
@@ -1017,22 +1257,22 @@ function RemoteScanner:FireRemote(log)
             return self:WithIncomingLogSuppressed(function()
                 if remoteType == "RemoteEvent" or remoteType == "UnreliableRemoteEvent" then
                     if firesignal then
-                        return firesignal(remote.OnClientEvent, unpack(args))
+                        return firesignal(remote.OnClientEvent, table.unpack(args, 1, argc))
                     end
                     return nil
                 elseif remoteType == "BindableEvent" then
                     if firesignal then
-                        return firesignal(remote.Event, unpack(args))
+                        return firesignal(remote.Event, table.unpack(args, 1, argc))
                     end
                     return nil
                 elseif remoteType == "RemoteFunction" then
                     if type(remote.OnClientInvoke) == "function" then
-                        return remote.OnClientInvoke(unpack(args))
+                        return remote.OnClientInvoke(table.unpack(args, 1, argc))
                     end
                     return nil
                 elseif remoteType == "BindableFunction" then
                     if type(remote.OnInvoke) == "function" then
-                        return remote.OnInvoke(unpack(args))
+                        return remote.OnInvoke(table.unpack(args, 1, argc))
                     end
                     return nil
                 end
@@ -1040,13 +1280,13 @@ function RemoteScanner:FireRemote(log)
         else
             
             if remoteType == "RemoteEvent" or remoteType == "UnreliableRemoteEvent" then
-                return remote:FireServer(unpack(args))
+                return remote:FireServer(table.unpack(args, 1, argc))
             elseif remoteType == "RemoteFunction" then
-                return remote:InvokeServer(unpack(args))
+                return remote:InvokeServer(table.unpack(args, 1, argc))
             elseif remoteType == "BindableEvent" then
-                return remote:Fire(unpack(args))
+                return remote:Fire(table.unpack(args, 1, argc))
             elseif remoteType == "BindableFunction" then
-                return remote:Invoke(unpack(args))
+                return remote:Invoke(table.unpack(args, 1, argc))
             end
         end
     end)
@@ -1054,39 +1294,69 @@ function RemoteScanner:FireRemote(log)
     return success, result
 end
 
+local function resolveGeneratedRemoteExpr(log)
+    if not log then
+        return nil
+    end
+    if typeof(log.Remote) == "Instance" then
+        local expr = formatRobloxPath(log.Remote)
+        if isUsablePathExpr(expr) then
+            return expr
+        end
+    end
+    local expr = formatRobloxPath(log.RemotePath)
+    if isUsablePathExpr(expr) then
+        return expr
+    end
+    return nil
+end
+
+local function resolveGeneratedArgCount(log)
+    if type(log.Arguments) == "table" and type(log.Arguments.n) == "number" then
+        return log.Arguments.n
+    end
+    if type(log.CachedArguments) == "table" and type(log.CachedArguments.n) == "number" then
+        return log.CachedArguments.n
+    end
+    if type(log.CachedArguments) == "table" then
+        return #log.CachedArguments
+    end
+    return log.ArgumentCount or 0
+end
+
+local GENERATED_DUMP_HELPER = [[
+local function dump(tag, args)
+    local n = args.n or #args
+    local parts = table.create(n)
+    for i = 1, n do
+        local ok, text = pcall(tostring, args[i])
+        parts[i] = ok and text or typeof(args[i])
+    end
+    print(tag, table.concat(parts, ", "))
+end
+]]
+
 function RemoteScanner:GenerateFireScript(log)
-    if not log then return "" end
-    
-    local lines = {
-        "-- Generated by Spy Tool",
-        "",
-    }
-    
-    local remotePath = log.RemotePath
+    if not log then
+        return ""
+    end
+
+    local remoteExpr = resolveGeneratedRemoteExpr(log)
+    if not remoteExpr then
+        return ""
+    end
+
     local remoteType = log.RemoteType:gsub(" %(Incoming%)", "")
     local isIncoming = log.IsIncoming
-    
-    
-    local pathParts = {}
-    for part in remotePath:gmatch("[^%.]+") do
-        table.insert(pathParts, part)
-    end
-    
-    local serviceName = pathParts[1]
-    local remoteLine = 'local remote = game:GetService("' .. serviceName .. '")'
-    
-    for i = 2, #pathParts do
-        remoteLine = remoteLine .. ':WaitForChild("' .. pathParts[i] .. '")'
-    end
-    
-    table.insert(lines, remoteLine)
-    table.insert(lines, "")
-    
-    
-    if log.ArgumentCount > 0 then
+    local argc = resolveGeneratedArgCount(log)
+    local lines = {
+        "local remote = " .. remoteExpr,
+    }
+
+    if argc > 0 then
         table.insert(lines, "local args = {")
-        for i = 1, log.ArgumentCount do
-            local arg = log.Arguments[i]
+        for i = 1, argc do
+            local arg = log.Arguments and log.Arguments[i]
             local snapshot = log.CachedArguments and log.CachedArguments[i]
             local serialized
             if snapshot then
@@ -1098,261 +1368,283 @@ function RemoteScanner:GenerateFireScript(log)
                     local success, result = pcall(function()
                         return parse(arg)
                     end)
-                    if success and result then
-                        serialized = result:gsub("\n", "\n    ")
-                    else
-                        serialized = "{}"
-                    end
+                    serialized = (success and result and result:gsub("\n", "\n    ")) or "{}"
                 else
                     serialized = serializeValue(arg, 1)
                 end
             end
-            
-            local comma = i < log.ArgumentCount and "," or ""
-            table.insert(lines, "    " .. serialized .. comma)
+            if serialized == nil then
+                serialized = "nil"
+            end
+            table.insert(lines, "    " .. serialized .. (i < argc and "," or ""))
         end
         table.insert(lines, "}")
-        table.insert(lines, "")
+        table.insert(lines, "local argc = " .. tostring(argc))
     end
-    
-    
+
+    local unpackExpr = argc > 0 and "table.unpack(args, 1, argc)" or ""
+
     if isIncoming then
-        
         if remoteType == "RemoteEvent" or remoteType == "UnreliableRemoteEvent" then
-            if log.ArgumentCount > 0 then
-                table.insert(lines, "firesignal(remote.OnClientEvent, unpack(args))")
-            else
-                table.insert(lines, "firesignal(remote.OnClientEvent)")
-            end
-        elseif remoteType == "RemoteFunction" then
-            table.insert(lines, "-- Note: RemoteFunction OnClientInvoke cannot be fired directly")
-            table.insert(lines, "-- You need to set up a callback instead:")
-            table.insert(lines, "-- remote.OnClientInvoke = function(...) return yourHandler(...) end")
+            table.insert(lines, argc > 0 and ([[
+local signal = remote.OnClientEvent
+if firesignal then
+    firesignal(signal, ]] .. unpackExpr .. [[)
+elseif typeof(getconnections) == "function" then
+    for _, connection in ipairs(getconnections(signal)) do
+        local fn = connection.Function
+        if typeof(fn) == "function" then
+            task.spawn(fn, ]] .. unpackExpr .. [[)
+        end
+    end
+end]]) or ([[
+local signal = remote.OnClientEvent
+if firesignal then
+    firesignal(signal)
+elseif typeof(getconnections) == "function" then
+    for _, connection in ipairs(getconnections(signal)) do
+        local fn = connection.Function
+        if typeof(fn) == "function" then
+            task.spawn(fn)
+        end
+    end
+end]]))
         elseif remoteType == "BindableEvent" then
-            if log.ArgumentCount > 0 then
-                table.insert(lines, "firesignal(remote.Event, unpack(args))")
-            else
-                table.insert(lines, "firesignal(remote.Event)")
-            end
+            table.insert(lines, argc > 0 and ([[
+local signal = remote.Event
+if firesignal then
+    firesignal(signal, ]] .. unpackExpr .. [[)
+elseif typeof(getconnections) == "function" then
+    for _, connection in ipairs(getconnections(signal)) do
+        local fn = connection.Function
+        if typeof(fn) == "function" then
+            task.spawn(fn, ]] .. unpackExpr .. [[)
+        end
+    end
+end]]) or ([[
+local signal = remote.Event
+if firesignal then
+    firesignal(signal)
+elseif typeof(getconnections) == "function" then
+    for _, connection in ipairs(getconnections(signal)) do
+        local fn = connection.Function
+        if typeof(fn) == "function" then
+            task.spawn(fn)
+        end
+    end
+end]]))
+        elseif remoteType == "RemoteFunction" then
+            table.insert(lines, argc > 0
+                and ("local cb = remote.OnClientInvoke\nif typeof(cb) == \"function\" then\n    return cb(" .. unpackExpr .. ")\nend")
+                or "local cb = remote.OnClientInvoke\nif typeof(cb) == \"function\" then\n    return cb()\nend")
         elseif remoteType == "BindableFunction" then
-            table.insert(lines, "-- Note: BindableFunction OnInvoke cannot be fired directly")
-            table.insert(lines, "-- You need to set up a callback instead:")
-            table.insert(lines, "-- remote.OnInvoke = function(...) return yourHandler(...) end")
+            table.insert(lines, argc > 0
+                and ("local cb = remote.OnInvoke\nif typeof(cb) == \"function\" then\n    return cb(" .. unpackExpr .. ")\nend")
+                or "local cb = remote.OnInvoke\nif typeof(cb) == \"function\" then\n    return cb()\nend")
         end
     else
-        
         if remoteType == "RemoteEvent" or remoteType == "UnreliableRemoteEvent" then
-            if log.ArgumentCount > 0 then
-                table.insert(lines, "remote:FireServer(unpack(args))")
-            else
-                table.insert(lines, "remote:FireServer()")
-            end
+            table.insert(lines, argc > 0
+                and ("remote:FireServer(" .. unpackExpr .. ")")
+                or "remote:FireServer()")
         elseif remoteType == "RemoteFunction" then
-            if log.ArgumentCount > 0 then
-                table.insert(lines, "local result = remote:InvokeServer(unpack(args))")
-            else
-                table.insert(lines, "local result = remote:InvokeServer()")
-            end
-            table.insert(lines, "print(\"Result:\", result)")
+            table.insert(lines, argc > 0
+                and ("local results = table.pack(remote:InvokeServer(" .. unpackExpr .. "))\nprint(table.unpack(results, 1, results.n))")
+                or "local results = table.pack(remote:InvokeServer())\nprint(table.unpack(results, 1, results.n))")
         elseif remoteType == "BindableEvent" then
-            if log.ArgumentCount > 0 then
-                table.insert(lines, "remote:Fire(unpack(args))")
-            else
-                table.insert(lines, "remote:Fire()")
-            end
+            table.insert(lines, argc > 0
+                and ("remote:Fire(" .. unpackExpr .. ")")
+                or "remote:Fire()")
         elseif remoteType == "BindableFunction" then
-            if log.ArgumentCount > 0 then
-                table.insert(lines, "local result = remote:Invoke(unpack(args))")
-            else
-                table.insert(lines, "local result = remote:Invoke()")
-            end
-            table.insert(lines, "print(\"Result:\", result)")
+            table.insert(lines, argc > 0
+                and ("local results = table.pack(remote:Invoke(" .. unpackExpr .. "))\nprint(table.unpack(results, 1, results.n))")
+                or "local results = table.pack(remote:Invoke())\nprint(table.unpack(results, 1, results.n))")
         end
     end
-    
+
     return table.concat(lines, "\n")
 end
 
 function RemoteScanner:GenerateInterceptScript(log)
-    if not log then return "", false end
-    
-    local usesHookfunction = isHookfunctionSupported()
-    local lines = {
-        "-- Generated by Spy Tool",
-        "",
-    }
-    appendInterceptHookHeader(lines, usesHookfunction)
-    
+    if not log then
+        return "", false
+    end
+
+    local remoteExpr = resolveGeneratedRemoteExpr(log)
+    if not remoteExpr then
+        return "", false
+    end
+
     local remoteType = log.RemoteType:gsub(" %(Incoming%)", "")
-    local isIncoming = log.IsIncoming
-    
-    
-    local remotePath = log.RemotePath
-    local pathParts = {}
-    for part in remotePath:gmatch("[^%.]+") do
-        table.insert(pathParts, part)
+    local isIncoming = log.IsIncoming == true
+    local useNamecall = isHookmetamethodSupported()
+    local useHookfunction = isHookfunctionSupported()
+
+    local mode
+    if isIncoming then
+        if remoteType == "RemoteFunction" or remoteType == "BindableFunction" then
+            mode = "callback"
+        else
+            mode = "getconnections"
+        end
+    elseif useNamecall then
+        mode = "hookmetamethod"
+    elseif useHookfunction then
+        mode = "hookfunction"
+    else
+        mode = "wrapper"
     end
-    
-    local serviceName = pathParts[1]
-    local remoteLine = 'local remote = game:GetService("' .. serviceName .. '")'
-    for i = 2, #pathParts do
-        remoteLine = remoteLine .. ':WaitForChild("' .. pathParts[i] .. '")'
+
+    local lines = {
+        "local remote = " .. remoteExpr,
+        "",
+        GENERATED_DUMP_HELPER,
+    }
+    appendInterceptHookHeader(lines, mode)
+
+    local function outgoingMethods()
+        if remoteType == "RemoteEvent" or remoteType == "UnreliableRemoteEvent" then
+            return { namecall = "FireServer", index = "FireServer" }
+        elseif remoteType == "RemoteFunction" then
+            return { namecall = "InvokeServer", index = "InvokeServer" }
+        elseif remoteType == "BindableEvent" then
+            return { namecall = "Fire", index = "Fire" }
+        elseif remoteType == "BindableFunction" then
+            return { namecall = "Invoke", index = "Invoke" }
+        end
+        return nil
     end
-    
-    table.insert(lines, remoteLine)
-    table.insert(lines, "")
-    
+
     if isIncoming then
         if remoteType == "RemoteEvent" or remoteType == "UnreliableRemoteEvent" then
             table.insert(lines, [[
--- Intercept incoming OnClientEvent by replacing connections
-local connections = getconnections(remote.OnClientEvent)
-
-for _, connection in ipairs(connections) do
-    local originalFunc = connection.Function
-    connection:Disconnect()
-    
-    remote.OnClientEvent:Connect(function(...)
-        local args = {...}
-        
-        -- Modify args here
-        -- Example: args[1] = "modified"
-        
-        -- To block: return (don't call original)
-        
-        print("Intercepted incoming:", remote.Name)
-        for i, arg in ipairs(args) do
-            print("  Arg " .. i .. ":", arg)
-        end
-        
-        -- Call original handler with (possibly modified) args
-        originalFunc(unpack(args))
-    end)
+assert(typeof(getconnections) == "function", "getconnections required")
+local signal = remote.OnClientEvent
+local originals = {}
+for _, connection in ipairs(getconnections(signal)) do
+    local fn = connection.Function
+    if typeof(fn) == "function" then
+        originals[#originals + 1] = fn
+        pcall(function()
+            if connection.Disable then
+                connection:Disable()
+            elseif connection.Disconnect then
+                connection:Disconnect()
+            end
+        end)
+    end
 end
+
+signal:Connect(function(...)
+    local args = table.pack(...)
+    dump("[Spy]", args)
+    for i = 1, #originals do
+        task.spawn(originals[i], table.unpack(args, 1, args.n))
+    end
+end)
+]])
+        elseif remoteType == "BindableEvent" then
+            table.insert(lines, [[
+assert(typeof(getconnections) == "function", "getconnections required")
+local signal = remote.Event
+local originals = {}
+for _, connection in ipairs(getconnections(signal)) do
+    local fn = connection.Function
+    if typeof(fn) == "function" then
+        originals[#originals + 1] = fn
+        pcall(function()
+            if connection.Disable then
+                connection:Disable()
+            elseif connection.Disconnect then
+                connection:Disconnect()
+            end
+        end)
+    end
+end
+
+signal:Connect(function(...)
+    local args = table.pack(...)
+    dump("[Spy]", args)
+    for i = 1, #originals do
+        task.spawn(originals[i], table.unpack(args, 1, args.n))
+    end
+end)
 ]])
         elseif remoteType == "RemoteFunction" then
             table.insert(lines, [[
--- Intercept incoming OnClientInvoke by replacing the callback
-local originalCallback = remote.OnClientInvoke
-
+local original = remote.OnClientInvoke
 remote.OnClientInvoke = function(...)
-    local args = {...}
-    
-    print("Intercepted incoming invoke:", remote.Name)
-    for i, arg in ipairs(args) do
-        print("  Arg " .. i .. ":", arg)
+    local args = table.pack(...)
+    dump("[Spy]", args)
+    if typeof(original) ~= "function" then
+        return
     end
-    
-    local result = originalCallback(unpack(args))
-
-    
-    print("  Returning:", result)
-    return result
+    return original(table.unpack(args, 1, args.n))
 end
 ]])
+        elseif remoteType == "BindableFunction" then
+            table.insert(lines, [[
+local original = remote.OnInvoke
+remote.OnInvoke = function(...)
+    local args = table.pack(...)
+    dump("[Spy]", args)
+    if typeof(original) ~= "function" then
+        return
+    end
+    return original(table.unpack(args, 1, args.n))
+end
+]])
+        else
+            return "", false
         end
     else
-        
-        table.insert(lines, 'local remotePath = "' .. log.RemotePath .. '"')
-        table.insert(lines, "")
-        
-        if usesHookfunction then
-            if remoteType == "RemoteEvent" then
-                table.insert(lines, [[
-local oldFireServer
-oldFireServer = hookfunction(Instance.new("RemoteEvent").FireServer, function(remote, ...)
-    if remote:GetFullName() == remotePath then
-        local args = {...}
-        
-        print("Intercepted:", remote.Name)
-        for i, arg in ipairs(args) do
-            print("  Arg " .. i .. ":", arg)
+        local methods = outgoingMethods()
+        if not methods then
+            return "", false
         end
-        
-        return oldFireServer(remote, unpack(args))
+
+        if mode == "hookmetamethod" then
+            -- __namecall only: covers remote:Method(...) without taxing every __index
+            table.insert(lines, string.format([[
+local METHOD = %q
+local wrap = newcclosure or function(fn)
+    return fn
+end
+
+local oldNamecall
+oldNamecall = hookmetamethod(game, "__namecall", wrap(function(self, ...)
+    if self ~= remote or getnamecallmethod() ~= METHOD or (checkcaller and checkcaller()) then
+        return oldNamecall(self, ...)
     end
-    return oldFireServer(remote, ...)
-end)
-]])
-            elseif remoteType == "UnreliableRemoteEvent" then
-                table.insert(lines, [[
-local oldFireServer
-oldFireServer = hookfunction(Instance.new("UnreliableRemoteEvent").FireServer, function(remote, ...)
-    if remote:GetFullName() == remotePath then
-        local args = {...}
-        
-        print("Intercepted:", remote.Name)
-        for i, arg in ipairs(args) do
-            print("  Arg " .. i .. ":", arg)
-        end
-        
-        return oldFireServer(remote, unpack(args))
+    local args = table.pack(...)
+    dump("[Spy] " .. METHOD, args)
+    return oldNamecall(self, table.unpack(args, 1, args.n))
+end))
+]], methods.namecall))
+        elseif mode == "hookfunction" then
+            table.insert(lines, string.format([[
+local proxy = Instance.new(%q)
+local oldMethod
+oldMethod = hookfunction(proxy[%q], function(self, ...)
+    if self ~= remote then
+        return oldMethod(self, ...)
     end
-    return oldFireServer(remote, ...)
+    local args = table.pack(...)
+    dump("[Spy] " .. %q, args)
+    return oldMethod(self, table.unpack(args, 1, args.n))
 end)
-]])
-            elseif remoteType == "RemoteFunction" then
-                table.insert(lines, [[
-local oldInvokeServer
-oldInvokeServer = hookfunction(Instance.new("RemoteFunction").InvokeServer, function(remote, ...)
-    if remote:GetFullName() == remotePath then
-        local args = {...}
-        
-        print("Intercepted:", remote.Name)
-        for i, arg in ipairs(args) do
-            print("  Arg " .. i .. ":", arg)
-        end
-        
-        local result = oldInvokeServer(remote, unpack(args))
-        
-        print("  Return:", result)
-        return result
-    end
-    return oldInvokeServer(remote, ...)
-end)
-]])
-            end
+proxy:Destroy()
+]], remoteType, methods.index, methods.namecall))
         else
-            if remoteType == "RemoteEvent" or remoteType == "UnreliableRemoteEvent" then
-                table.insert(lines, [[
--- Replace remote:FireServer(...) with FireServerIntercept(remote, ...)
-local function FireServerIntercept(remote, ...)
-    if remote:GetFullName() == remotePath then
-        local args = {...}
-        
-        print("Intercepted:", remote.Name)
-        for i, arg in ipairs(args) do
-            print("  Arg " .. i .. ":", arg)
-        end
-        
-        -- To block: return without calling FireServer
-    end
-    return remote.FireServer(remote, ...)
+            table.insert(lines, string.format([[
+local function %s(...)
+    local args = table.pack(...)
+    dump("[Spy] " .. %q, args)
+    return remote[%q](remote, table.unpack(args, 1, args.n))
 end
-]])
-            elseif remoteType == "RemoteFunction" then
-                table.insert(lines, [[
--- Replace remote:InvokeServer(...) with InvokeServerIntercept(remote, ...)
-local function InvokeServerIntercept(remote, ...)
-    if remote:GetFullName() == remotePath then
-        local args = {...}
-        
-        print("Intercepted:", remote.Name)
-        for i, arg in ipairs(args) do
-            print("  Arg " .. i .. ":", arg)
-        end
-        
-        local result = remote.InvokeServer(remote, unpack(args))
-        
-        print("  Return:", result)
-        return result
-    end
-    return remote.InvokeServer(remote, ...)
-end
-]])
-            end
+]], methods.namecall, methods.namecall, methods.index))
         end
     end
-    
-    return table.concat(lines, "\n"), usesHookfunction
+
+    return table.concat(lines, "\n"):gsub("\n+$", ""), mode == "hookmetamethod" or mode == "hookfunction"
 end
