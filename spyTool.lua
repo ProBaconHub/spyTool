@@ -4,18 +4,28 @@
     Run in-game:
       loadstring(game:HttpGet("https://raw.githubusercontent.com/ProBaconHub/spyTool/refs/heads/main/spyTool.lua?t=" .. tostring(tick()), true))()
 
+    Sync/update resolves the live main tip SHA via api.github.com, then downloads
+    from raw.githubusercontent.com/<sha>/... to avoid branch-tip CDN staleness.
+
     To skip GitHub sync, set getgenv().__SpyToolDevSkipSync = true
 ]]
 
 local REPO_OWNER = "ProBaconHub"
 local REPO_NAME = "spyTool"
 local REPO_BRANCH = "main"
-local RAW_BASE = string.format(
+local BRANCH_RAW_BASE = string.format(
     "https://raw.githubusercontent.com/%s/%s/refs/heads/%s",
     REPO_OWNER,
     REPO_NAME,
     REPO_BRANCH
 )
+local API_REPO_BASE = string.format(
+    "https://api.github.com/repos/%s/%s",
+    REPO_OWNER,
+    REPO_NAME
+)
+local RAW_BASE = BRANCH_RAW_BASE
+local _pinnedCommitSha = nil
 
 local WORKSPACE_FOLDER = "spyTool"
 local MANIFEST_REL = "manifest.json"
@@ -86,31 +96,30 @@ local function resolveLocalBootstrapPath()
 end
 
 do
+    local fromHandoff = (... == true)
     local env = getDevGenv()
-    local alreadyLocal = env and env[DEV_HANDOFF_KEY] == true
-    if not alreadyLocal and hasDevMarkerFile() then
+    if not fromHandoff and env and env[DEV_HANDOFF_KEY] == true then
+        fromHandoff = true
+    end
+    if env then
+        env[DEV_HANDOFF_KEY] = nil
+    end
+    if not fromHandoff and hasDevMarkerFile() then
         local localPath = resolveLocalBootstrapPath()
         if localPath and type(readfile) == "function" then
             if env then
-                env[DEV_HANDOFF_KEY] = true
                 env[DEV_GENV_SKIP_SYNC] = true
             end
             log("dev mode: handing off to local " .. localPath)
             local okRead, source = pcall(readfile, localPath)
             if not okRead or type(source) ~= "string" or source == "" then
-                if env then
-                    env[DEV_HANDOFF_KEY] = nil
-                end
                 error("[SpyTool] failed to read local bootstrap: " .. tostring(source))
             end
             local chunk, compileErr = loadstring(source, "@" .. localPath)
             if not chunk then
-                if env then
-                    env[DEV_HANDOFF_KEY] = nil
-                end
                 error("[SpyTool] failed to compile local bootstrap: " .. tostring(compileErr))
             end
-            return chunk()
+            return chunk(true)
         end
         log("dev marker found but local spyTool.lua missing; continuing with remote bootstrap")
     end
@@ -131,15 +140,21 @@ local function withCacheBust(url)
     return url .. "?" .. bust
 end
 
-local function requestNoCache(requestFn, url)
+local function requestNoCache(requestFn, url, extraHeaders)
+    local headers = {
+        ["Cache-Control"] = "no-cache, no-store, must-revalidate",
+        ["Pragma"] = "no-cache",
+        ["Expires"] = "0",
+    }
+    if type(extraHeaders) == "table" then
+        for key, value in pairs(extraHeaders) do
+            headers[key] = value
+        end
+    end
     local res = requestFn({
         Url = url,
         Method = "GET",
-        Headers = {
-            ["Cache-Control"] = "no-cache, no-store, must-revalidate",
-            ["Pragma"] = "no-cache",
-            ["Expires"] = "0",
-        },
+        Headers = headers,
     })
     if type(res) == "table" then
         return res.Body or res.body
@@ -147,23 +162,23 @@ local function requestNoCache(requestFn, url)
     return res
 end
 
-local function httpGet(url)
+local function httpGet(url, extraHeaders)
     url = withCacheBust(url)
     local getters = {}
 
     if type(request) == "function" then
         getters[#getters + 1] = function()
-            return requestNoCache(request, url)
+            return requestNoCache(request, url, extraHeaders)
         end
     end
     if type(http) == "table" and type(http.request) == "function" then
         getters[#getters + 1] = function()
-            return requestNoCache(http.request, url)
+            return requestNoCache(http.request, url, extraHeaders)
         end
     end
     if type(syn) == "table" and type(syn.request) == "function" then
         getters[#getters + 1] = function()
-            return requestNoCache(syn.request, url)
+            return requestNoCache(syn.request, url, extraHeaders)
         end
     end
 
@@ -201,11 +216,6 @@ local function httpGet(url)
     error("[SpyTool] HttpGet failed for " .. url .. ": " .. tostring(lastErr))
 end
 
-local function rawUrl(relPath)
-    relPath = tostring(relPath or ""):gsub("^/+", "")
-    return withCacheBust(RAW_BASE .. "/" .. relPath)
-end
-
 local function fingerprint(content)
     if type(content) ~= "string" then
         return "0:0000000000000000"
@@ -222,6 +232,88 @@ end
 local function decodeJson(text)
     local HttpService = game:GetService("HttpService")
     return HttpService:JSONDecode(text)
+end
+
+local function rawBaseForSha(sha)
+    return string.format(
+        "https://raw.githubusercontent.com/%s/%s/%s",
+        REPO_OWNER,
+        REPO_NAME,
+        tostring(sha)
+    )
+end
+
+local function parseCommitSha(data)
+    if type(data) ~= "table" then
+        return nil
+    end
+    if type(data.sha) == "string" and #data.sha >= 7 then
+        return data.sha
+    end
+    if type(data.commit) == "table" and type(data.commit.sha) == "string" and #data.commit.sha >= 7 then
+        return data.commit.sha
+    end
+    if type(data.object) == "table" and type(data.object.sha) == "string" and #data.object.sha >= 7 then
+        return data.object.sha
+    end
+    return nil
+end
+
+local function resolveTipCommitSha()
+    local apiHeaders = {
+        ["Accept"] = "application/vnd.github+json",
+        ["User-Agent"] = "ProBaconHub-SpyTool",
+    }
+    local endpoints = {
+        API_REPO_BASE .. "/commits/" .. REPO_BRANCH,
+        API_REPO_BASE .. "/branches/" .. REPO_BRANCH,
+        API_REPO_BASE .. "/git/ref/heads/" .. REPO_BRANCH,
+    }
+    local lastErr
+    for _, endpoint in ipairs(endpoints) do
+        local ok, body = pcall(httpGet, endpoint, apiHeaders)
+        if ok and type(body) == "string" and #body > 0 then
+            local decodeOk, data = pcall(decodeJson, body)
+            if decodeOk then
+                local sha = parseCommitSha(data)
+                if sha then
+                    return sha
+                end
+                lastErr = "response missing commit sha"
+            else
+                lastErr = data
+            end
+        else
+            lastErr = body
+        end
+    end
+    error("[SpyTool] failed to resolve tip commit for " .. REPO_BRANCH .. ": " .. tostring(lastErr))
+end
+
+local function ensureCommitPin(force)
+    if force then
+        _pinnedCommitSha = nil
+    end
+    if type(_pinnedCommitSha) == "string" and #_pinnedCommitSha >= 7 then
+        RAW_BASE = rawBaseForSha(_pinnedCommitSha)
+        return _pinnedCommitSha
+    end
+    local ok, shaOrErr = pcall(resolveTipCommitSha)
+    if ok and type(shaOrErr) == "string" and #shaOrErr >= 7 then
+        _pinnedCommitSha = shaOrErr
+        RAW_BASE = rawBaseForSha(_pinnedCommitSha)
+        log("pinned raw downloads to " .. _pinnedCommitSha:sub(1, 7) .. " (" .. REPO_BRANCH .. ")")
+        return _pinnedCommitSha
+    end
+    RAW_BASE = BRANCH_RAW_BASE
+    _pinnedCommitSha = nil
+    log("commit pin failed; falling back to branch raw CDN: " .. tostring(shaOrErr))
+    return nil
+end
+
+local function rawUrl(relPath)
+    relPath = tostring(relPath or ""):gsub("^/+", "")
+    return withCacheBust(RAW_BASE .. "/" .. relPath)
 end
 
 local function joinPath(...)
@@ -364,6 +456,7 @@ local function loadInstallerUi(preferLocal)
     end
 
     if type(source) ~= "string" or source == "" then
+        ensureCommitPin(false)
         source = httpGet(rawUrl(INSTALLER_UI_REL))
         sourceLabel = "remote:" .. INSTALLER_UI_REL
     end
@@ -389,6 +482,7 @@ local function loadInstallerUi(preferLocal)
     end
 
     if spinnerImage == "" then
+        ensureCommitPin(false)
         local okFetch, spinnerBody = pcall(httpGet, rawUrl(INSTALLER_SPINNER_REL))
         if okFetch and type(spinnerBody) == "string" and #spinnerBody > 0 and type(writefile) == "function" then
             ensureFolder(INSTALLER_TMP_DIR)
@@ -409,6 +503,7 @@ local function loadInstallerUi(preferLocal)
 end
 
 local function fetchRemoteManifest()
+    ensureCommitPin(false)
     local body = httpGet(rawUrl(MANIFEST_REL))
     local data = decodeJson(body)
     if type(data) ~= "table" or type(data.files) ~= "table" then
@@ -456,11 +551,13 @@ end
 local function syncFromGitHub(progressUi)
     if type(writefile) ~= "function" or type(readfile) ~= "function" then
         log("filesystem APIs missing; skipping sync (expecting preinstalled files)")
-        return false, { updated = 0, skipped = 0, failed = 0, pending = 0 }
+        return false, { updated = 0, skipped = 0, failed = 0, pending = 0, sha = nil }
     end
 
     ensureFolder(WORKSPACE_FOLDER)
 
+    reportProgress(progressUi, 0, 1, nil, "Resolving latest commit…")
+    local tipSha = ensureCommitPin(true)
     reportProgress(progressUi, 0, 1, nil, "Fetching manifest…")
     local remoteManifest, remoteBody = fetchRemoteManifest()
     local pending = collectPendingUpdates(remoteManifest)
@@ -469,12 +566,20 @@ local function syncFromGitHub(progressUi)
     local updated = 0
     local failed = 0
     local skipped = #remoteManifest.files - totalPending
+    local statsBase = { sha = tipSha or _pinnedCommitSha }
 
     if totalPending == 0 then
         pcall(writeFile, workspacePath(MANIFEST_REL), remoteBody)
         reportProgress(progressUi, 1, 1, nil, "Already up to date")
-        log("sync complete: 0 updated, " .. tostring(skipped) .. " unchanged, 0 failed")
-        return true, { updated = 0, skipped = skipped, failed = 0, pending = 0 }
+        log("sync complete: 0 updated, " .. tostring(skipped) .. " unchanged, 0 failed"
+            .. (statsBase.sha and (" @ " .. tostring(statsBase.sha):sub(1, 7)) or ""))
+        return true, {
+            updated = 0,
+            skipped = skipped,
+            failed = 0,
+            pending = 0,
+            sha = statsBase.sha,
+        }
     end
 
     reportProgress(progressUi, 0, totalPending, nil, "Updating files…")
@@ -511,11 +616,23 @@ local function syncFromGitHub(progressUi)
         reportProgress(progressUi, totalPending, totalPending, nil, "Finishing…")
     end
 
-    log(string.format("sync complete: %d updated, %d unchanged, %d failed", updated, skipped, failed))
+    log(string.format(
+        "sync complete: %d updated, %d unchanged, %d failed%s",
+        updated,
+        skipped,
+        failed,
+        statsBase.sha and (" @ " .. tostring(statsBase.sha):sub(1, 7)) or ""
+    ))
     if failed > 0 and updated == 0 and skipped == 0 then
         error("[SpyTool] sync failed for all files")
     end
-    return true, { updated = updated, skipped = skipped, failed = failed, pending = totalPending }
+    return true, {
+        updated = updated,
+        skipped = skipped,
+        failed = failed,
+        pending = totalPending,
+        sha = statsBase.sha,
+    }
 end
 
 local function loadMain()
@@ -568,7 +685,8 @@ local function destroyRunningTool()
 end
 
 local function reloadPublicBootstrap()
-    local source = httpGet(RAW_BASE .. "/" .. BOOTSTRAP_REL)
+    ensureCommitPin(true)
+    local source = httpGet(rawUrl(BOOTSTRAP_REL))
     local chunk, compileErr = loadstring(source, "@" .. BOOTSTRAP_REL .. "#public")
     if not chunk then
         error("[SpyTool] failed to compile public bootstrap: " .. tostring(compileErr))
@@ -581,6 +699,40 @@ local function fetchPublicVersionAndReload()
     clearDevMarkers()
     destroyRunningTool()
     return reloadPublicBootstrap()
+end
+
+local function parseRemoteAppVersion(source)
+    if type(source) ~= "string" then
+        return nil
+    end
+    local ver = source:match('SPYTOOL_VERSION%s*=%s*"([^"]+)"')
+        or source:match("SPYTOOL_VERSION%s*=%s*'([^']+)'")
+    if type(ver) == "string" and ver ~= "" then
+        return ver
+    end
+    return nil
+end
+
+local function checkForUpdates()
+    local tipSha = ensureCommitPin(true)
+    local remoteManifest = fetchRemoteManifest()
+    local pending = collectPendingUpdates(remoteManifest)
+    local remoteVersion = nil
+    local okCore, coreBody = pcall(httpGet, rawUrl("modules/01_core.lua"))
+    if okCore then
+        remoteVersion = parseRemoteAppVersion(coreBody)
+    end
+    local pendingPaths = {}
+    for i = 1, math.min(8, #pending) do
+        pendingPaths[#pendingPaths + 1] = pending[i].path
+    end
+    return {
+        available = #pending > 0,
+        pending = #pending,
+        sha = tipSha or _pinnedCommitSha,
+        remoteVersion = remoteVersion,
+        pendingPaths = pendingPaths,
+    }
 end
 
 local function registerBootstrapApi(devMode)
@@ -596,6 +748,7 @@ local function registerBootstrapApi(devMode)
             return hasDevMarkerFile() or env[DEV_HANDOFF_KEY] == true or env[DEV_GENV_SKIP_SYNC] == true
         end,
         FetchPublicVersion = fetchPublicVersionAndReload,
+        CheckForUpdates = checkForUpdates,
         UpdateToLatest = function(progressUi, opts)
             opts = opts or {}
             log("updating workspace files to latest…")
@@ -677,7 +830,6 @@ local syncOk, syncErr = true, nil
 if devSkipSync then
     log("dev mode: skipping syncFromGitHub")
 else
-    -- Show updater progress when files need refreshing (not only first install).
     if not installerUi then
         local peekOk, remoteManifest = pcall(fetchRemoteManifest)
         local pending = 0

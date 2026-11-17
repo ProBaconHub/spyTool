@@ -107,8 +107,6 @@ function RemoteScanner.CaptureCallerFunction()
     if type(rawInfo) ~= "function" then
         return nil
     end
-    -- pcall(rawInfo, level, "f") makes level 1 = CaptureCallerFunction.
-    -- Skip our own frames / chunk, then return the first real game caller.
     for level = 2, 18 do
         local ok, fn = pcall(rawInfo, level, "f")
         if not ok or typeof(fn) ~= "function" then
@@ -326,7 +324,6 @@ function RemoteScanner:Scan()
 
     self.FoundRemotes = nextFound
 
-    -- Rescan while spying must re-arm hooks for newly discovered remotes.
     if self.IsSpying then
         self:RebindIncomingHooks()
     end
@@ -453,7 +450,6 @@ function RemoteScanner:RestoreIncomingHooks()
                 if property and data.Instance[property] == backup.Wrapper then
                     data.Instance[property] = backup.Original
                 elseif property and backup.Original ~= nil then
-                    -- Only restore if still our wrapper or original was non-nil.
                     if data.Instance[property] == backup.Wrapper then
                         data.Instance[property] = backup.Original
                     end
@@ -502,7 +498,6 @@ function RemoteScanner:CreateLog(remote, remoteType, args, callerFunc, returnVal
     local now = tick()
     local timestamp = getTimestamp()
     
-    -- Bindables are local signals/calls — never label them Incoming/Outgoing.
     local displayType = baseType
     if directional and isIncoming then
         displayType = baseType .. " (Incoming)"
@@ -604,7 +599,6 @@ function RemoteScanner:CreateLog(remote, remoteType, args, callerFunc, returnVal
     argGroup.LastCall = timestamp
     argGroup.LastCallTick = now
     
-    -- Latest sort depends on LastCallTick; keep cache fresh for both modes.
     group._argGroupsDirty = true
     group._sortedArgGroupsCache = nil
     
@@ -903,7 +897,6 @@ function RemoteScanner:StartSpying()
                 local args = table.pack(...)
                 local blocked = scanner:ShouldBlock(path, args)
                 if scanner.IsSpying and (scanner.IncomingLogSuppressDepth or 0) == 0 then
-                    -- RemoteFunction is directional incoming; BindableFunction is local.
                     local asIncoming = data.Type == "RemoteFunction"
                     scanner:QueueLog(
                         remote,
@@ -945,7 +938,6 @@ function RemoteScanner:StartSpying()
         local state = ensureRemoteState(remote, path)
         local remoteName = remote.Name
 
-        -- BindableEvent: no incoming/outgoing taps. Listeners are listed in info.
         if data.Type == "BindableEvent" then
             self:RefreshConnectionInfo(data)
             return
@@ -965,7 +957,6 @@ function RemoteScanner:StartSpying()
                     local blocked = self:ShouldBlock(path, args)
                     self:QueueLog(remote, data.Type, args, nil, nil, true, blocked, path, remoteName)
                     if blocked then
-                        -- Other listeners are disabled via ApplyIncomingBlockState when instance-blocked.
                         return
                     end
                 end)
@@ -973,7 +964,6 @@ function RemoteScanner:StartSpying()
             if success and conn then
                 state.Connections[#state.Connections + 1] = conn
                 state.IncomingConnected = true
-                -- Keep our spy connection enabled if the executor exposes Enable.
                 pcall(function()
                     if conn.Enable then
                         conn:Enable()
@@ -1004,7 +994,6 @@ function RemoteScanner:StartSpying()
         end
     end
 
-    -- Re-apply callback hooks if games overwrite OnClientInvoke / OnInvoke after us.
     local maintainConn = RunService.Heartbeat:Connect(function()
         if not self.IsSpying then
             return
@@ -1604,7 +1593,6 @@ end
         end
 
         if mode == "hookmetamethod" then
-            -- __namecall only: covers remote:Method(...) without taxing every __index
             table.insert(lines, string.format([[
 local METHOD = %q
 local wrap = newcclosure or function(fn)

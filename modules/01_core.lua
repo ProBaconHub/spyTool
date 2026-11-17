@@ -1,6 +1,6 @@
 -- spyTool/modules/01_core.lua
 
-local SPYTOOL_VERSION = "1.1.2"
+local SPYTOOL_VERSION = "1.2.0"
 
 local function getSpyToolVersion()
     return SPYTOOL_VERSION
@@ -157,13 +157,10 @@ local function resolveAssetWorkspacePath(fileName)
             end
         end
     end
-    -- Prefer workspace-rooted path even when isfile is unavailable.
     _assetPathCache[fileName] = candidates[1]
     return candidates[1]
 end
 
--- getcustomasset caches by path inside the executor. Replacing logo.png on disk
--- keeps serving the old bytes unless we request a content-unique path.
 local function getAssetImage(fileName)
     if type(fileName) ~= "string" or fileName == "" then
         return nil
@@ -231,8 +228,6 @@ local function getAssetImage(fileName)
     return nil
 end
 
--- Roblox/UNC custom fonts require a font-family JSON that references the TTF
--- via getcustomasset. Font.new(ttfUrl) alone does not load glyphs.
 local function getAssetFont(fileName, weight, style)
     if type(fileName) ~= "string" or fileName == "" then
         return nil
@@ -326,7 +321,6 @@ local function getAssetFont(fileName, weight, style)
 
     local okWrite = pcall(safeWritefile, familyPath, familyJson)
     if not okWrite then
-        -- Some installs keep assets at bare asset/fonts
         familyPath = "asset/fonts/" .. familyName .. ".json"
         familyRel = "fonts/" .. familyName .. ".json"
         okWrite = pcall(safeWritefile, familyPath, familyJson)
@@ -352,7 +346,6 @@ local function getAssetFont(fileName, weight, style)
     end
     if okFont and font then
         _assetFontCache[cacheKey] = font
-        -- Keep family json discoverable like other assets.
         _assetImageCache[familyRel] = familyAsset
         return font
     end

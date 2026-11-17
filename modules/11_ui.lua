@@ -1,6 +1,9 @@
 -- spyTool/modules/11_ui.lua
 
 local SETTINGS_FILE_PATH = "ProBaconHub/RemoteSpySettings.json"
+local UPDATE_LOG_PATH = "spyTool/update.log.txt"
+local UPDATE_CHECK_INTERVAL = 300
+local SPYTOOL_IGNORED_UPDATE_KEY = "__ProBaconHubSpyToolIgnoredUpdate__"
 
 local LOG_CAP_MIN = 0
 local LOG_CAP_MAX = 2000
@@ -635,6 +638,7 @@ function RemoteSpyUI:Create()
 
     self:EnsureRefreshConnections()
     self:_beginStartupScan()
+    self:StartAutoUpdateChecker()
     
     return self.ScreenGui
 end
@@ -944,8 +948,6 @@ function RemoteSpyUI:CreateTitleBar()
         Parent = self.MainFrame,
     })
 
-    -- Top cap sized to the title bar (same TL-TR plate language as Remotes header).
-    -- Do not use a full-window plate + clip — that makes the visible corner look circular.
     local titleFill = createSquircle(windowR, "Window-TL-TR", {
         Name = "TitleBarFill",
         Size = UDim2.new(1, 0, 1, 0),
@@ -1009,7 +1011,6 @@ function RemoteSpyUI:CreateTitleBar()
     applyAssetIcon(logoImage, "logo.png", logoFallback)
 
     local titleX = logoSize + logoTextGap
-    -- Shared bottom edge so the smaller version sits on the title baseline ("floor").
     local titleBandH = titleTextSize + 4
     local titleLabel = createInstance("TextLabel", {
         Name = "TitleText",
@@ -1149,8 +1150,6 @@ function RemoteSpyUI:CreateSidebar()
         Parent = self.MainFrame
     })
 
-    -- Full-window Secondary plate, clipped to the sidebar strip so bottom-left
-    -- keeps the same G2 corner as MainFrame (title top uses its own TL-TR plate).
     local mainW, mainH = self:GetMainFrameLayoutSize()
     local sidebarFill = createSquircle(windowR, "Window", {
         Name = "SidebarFill",
@@ -3984,22 +3983,20 @@ function RemoteSpyUI:CreateContentEntry(moduleData, contentData, order)
             AnchorPoint = Vector2.new(0.5, 0.5),
             ImageColor3 = Theme.Warning,
         })
-    elseif contentData.IsInstance or contentData.DisplayType == "Instance" then
-        local className = contentData.InstanceClass
-        if (not className or className == "") and typeof(contentData.Value) == "Instance" then
-            className = contentData.Value.ClassName
-        end
-        createClassIcon(header, className or "Instance", 12, {
-            Name = "ContentTypeIcon",
-            Position = UDim2.new(0, 13, 0.5, 0),
-            AnchorPoint = Vector2.new(0.5, 0.5),
-        })
     else
-        createAssetGlyph(header, "equal.png", 12, {
+        local className = contentData.InstanceClass
+        if contentData.IsInstance or contentData.DisplayType == "Instance" then
+            if (not className or className == "") and typeof(contentData.Value) == "Instance" then
+                className = contentData.Value.ClassName
+            end
+            className = className or "Instance"
+        else
+            className = valueTypeClassName(contentData.DisplayType or contentData.Type, contentData.Value)
+        end
+        createClassIcon(header, className, 12, {
             Name = "ContentTypeIcon",
             Position = UDim2.new(0, 13, 0.5, 0),
             AnchorPoint = Vector2.new(0.5, 0.5),
-            ImageColor3 = Theme.TextMuted,
         })
     end
     
@@ -5546,7 +5543,7 @@ function RemoteSpyUI:CreateSettingsTab()
         Size = UDim2.new(1, 0, 0, 0),
         AutomaticSize = Enum.AutomaticSize.Y,
         BackgroundTransparency = 1,
-        Text = "Installed version " .. getSpyToolVersion() .. ". Pull the latest workspace files from GitHub when available.",
+        Text = "Installed version " .. getSpyToolVersion() .. ". Check for updates when a newer public build is available.",
         TextColor3 = Theme.TextSecondary,
         TextSize = 11,
         Font = Theme.FontFamily,
@@ -5562,9 +5559,10 @@ function RemoteSpyUI:CreateSettingsTab()
         LayoutOrder = 3,
         Parent = updatesCard,
     })
+    createListLayout(updateRow, 8, Enum.FillDirection.Horizontal, Enum.HorizontalAlignment.Left, Enum.VerticalAlignment.Center)
 
-    UIComponents.Button(updateRow, "Update to latest", "primary", function()
-        self:StartUpdateToLatest()
+    UIComponents.Button(updateRow, "Check for updates", "primary", function()
+        self:CheckForUpdates({ manual = true })
     end)
 
     local aboutCard = createPanel(Theme.Radius.Medium, {
@@ -5667,7 +5665,7 @@ function RemoteSpyUI:CreateSettingsTab()
             Size = UDim2.new(1, 0, 0, 0),
             AutomaticSize = Enum.AutomaticSize.Y,
             BackgroundTransparency = 1,
-            Text = "Dev mode is active (spyTool/.dev). Local files are used and GitHub sync is skipped. Update to latest clears .dev and reloads the public release.",
+            Text = "Dev mode is active (spyTool/.dev). Local files are used and GitHub sync is skipped. Switch to public release clears .dev and reloads the published build.",
             TextColor3 = Theme.TextSecondary,
             TextSize = 11,
             Font = Theme.FontFamily,
@@ -5676,10 +5674,589 @@ function RemoteSpyUI:CreateSettingsTab()
             LayoutOrder = 2,
             Parent = devCard,
         })
+
+        local devRow = createInstance("Frame", {
+            Size = UDim2.new(1, 0, 0, 34),
+            BackgroundTransparency = 1,
+            LayoutOrder = 3,
+            Parent = devCard,
+        })
+        createListLayout(devRow, 8, Enum.FillDirection.Horizontal, Enum.HorizontalAlignment.Left, Enum.VerticalAlignment.Center)
+
+        UIComponents.Button(devRow, "Switch to public release", "primary", function()
+            self:FetchPublicRelease()
+        end)
     end
 
     self._updateStatusLabel = updateStatus
+    self:_loadSkippedUpdateIds()
     self.SettingsTab = tab
+end
+
+function RemoteSpyUI:_getBootstrapApi()
+    local env = (getgenv and getgenv()) or nil
+    if type(env) ~= "table" then
+        return nil
+    end
+    local boot = env.__SpyToolBootstrap
+    if type(boot) == "table" then
+        return boot
+    end
+    return nil
+end
+
+function RemoteSpyUI:_updateIdentity(info)
+    if type(info) ~= "table" then
+        return "unknown"
+    end
+    if type(info.sha) == "string" and info.sha ~= "" then
+        if type(info.remoteVersion) == "string" and info.remoteVersion ~= "" then
+            return "v:" .. info.remoteVersion .. "@sha:" .. info.sha
+        end
+        return "sha:" .. info.sha
+    end
+    if type(info.remoteVersion) == "string" and info.remoteVersion ~= "" then
+        return "v:" .. info.remoteVersion
+    end
+    return "pending:" .. tostring(info.pending or 0)
+end
+
+function RemoteSpyUI:_appendUpdateLog(line)
+    if type(writefile) ~= "function" then
+        return
+    end
+    local stamp = (type(getFullTimestamp) == "function" and getFullTimestamp()) or os.date("%Y-%m-%d %H:%M:%S")
+    local entry = string.format("[%s] %s\n", stamp, tostring(line or ""))
+    local existing = ""
+    if type(readfile) == "function" and type(isfile) == "function" and isfile(UPDATE_LOG_PATH) then
+        local ok, body = pcall(readfile, UPDATE_LOG_PATH)
+        if ok and type(body) == "string" then
+            existing = body
+        end
+    end
+    if type(makefolder) == "function" and type(isfolder) == "function" and not isfolder("spyTool") then
+        pcall(makefolder, "spyTool")
+    end
+    local merged = existing .. entry
+    if #merged > 24000 then
+        merged = merged:sub(#merged - 20000)
+        local cut = merged:find("\n", 1, true)
+        if cut then
+            merged = merged:sub(cut + 1)
+        end
+    end
+    pcall(writefile, UPDATE_LOG_PATH, merged)
+end
+
+function RemoteSpyUI:_loadSkippedUpdateIds()
+    local skipped = {}
+    if type(readfile) ~= "function" or type(isfile) ~= "function" or not isfile(UPDATE_LOG_PATH) then
+        self._skippedUpdateIds = skipped
+        return skipped
+    end
+    local ok, body = pcall(readfile, UPDATE_LOG_PATH)
+    if not ok or type(body) ~= "string" then
+        self._skippedUpdateIds = skipped
+        return skipped
+    end
+    for line in string.gmatch(body, "[^\r\n]+") do
+        if line:find("| skip |", 1, true) then
+            local id = line:match("id=([^%s|]+)")
+            if id and id ~= "" then
+                skipped[id] = true
+            end
+        end
+    end
+    self._skippedUpdateIds = skipped
+    return skipped
+end
+
+function RemoteSpyUI:_isUpdateSkipped(id)
+    if type(id) ~= "string" or id == "" then
+        return false
+    end
+    local skipped = self._skippedUpdateIds or self:_loadSkippedUpdateIds()
+    return skipped[id] == true
+end
+
+function RemoteSpyUI:_markUpdateSkipped(id, info)
+    if type(id) ~= "string" or id == "" then
+        return
+    end
+    local skipped = self._skippedUpdateIds or self:_loadSkippedUpdateIds()
+    skipped[id] = true
+    self._skippedUpdateIds = skipped
+    local version = (type(info) == "table" and info.remoteVersion) or getSpyToolVersion()
+    local sha = (type(info) == "table" and info.sha) or ""
+    self:_appendUpdateLog(string.format(
+        "skip | id=%s | version=%s | sha=%s | pending=%s",
+        id,
+        tostring(version),
+        tostring(sha),
+        tostring(type(info) == "table" and info.pending or 0)
+    ))
+end
+
+function RemoteSpyUI:_getIgnoredUpdateStore()
+    local env = getSpyGenv()
+    local store = env[SPYTOOL_IGNORED_UPDATE_KEY]
+    if type(store) ~= "table" then
+        store = { ids = {} }
+        env[SPYTOOL_IGNORED_UPDATE_KEY] = store
+    elseif type(store.ids) ~= "table" then
+        store.ids = {}
+    end
+    return store
+end
+
+function RemoteSpyUI:_isUpdateIgnored(id)
+    if type(id) ~= "string" or id == "" then
+        return false
+    end
+    local store = self:_getIgnoredUpdateStore()
+    return store.ids[id] == true
+end
+
+function RemoteSpyUI:_markUpdateIgnored(id, info)
+    if type(id) ~= "string" or id == "" then
+        return
+    end
+    local store = self:_getIgnoredUpdateStore()
+    store.ids[id] = true
+    store.lastId = id
+    store.lastVersion = (type(info) == "table" and info.remoteVersion) or nil
+    store.lastSha = (type(info) == "table" and info.sha) or nil
+    store.at = (type(getFullTimestamp) == "function" and getFullTimestamp()) or os.date("%Y-%m-%d %H:%M:%S")
+    self:_appendUpdateLog(string.format(
+        "ignore | id=%s | version=%s | sha=%s | session=getgenv",
+        id,
+        tostring(store.lastVersion or ""),
+        tostring(store.lastSha or "")
+    ))
+end
+
+function RemoteSpyUI:_readUpdateLogText()
+    if type(readfile) ~= "function" or type(isfile) ~= "function" then
+        return nil
+    end
+    if not isfile(UPDATE_LOG_PATH) then
+        return nil
+    end
+    local ok, body = pcall(readfile, UPDATE_LOG_PATH)
+    if not ok or type(body) ~= "string" then
+        return nil
+    end
+    body = body:gsub("^%s+", ""):gsub("%s+$", "")
+    if body == "" then
+        return nil
+    end
+    local lines = {}
+    for line in string.gmatch(body, "[^\r\n]+") do
+        lines[#lines + 1] = line
+    end
+    if #lines == 0 then
+        return nil
+    end
+    local maxLines = 40
+    if #lines > maxLines then
+        local trimmed = {}
+        for i = #lines - maxLines + 1, #lines do
+            trimmed[#trimmed + 1] = lines[i]
+        end
+        lines = trimmed
+    end
+    return table.concat(lines, "\n")
+end
+
+function RemoteSpyUI:_showUpdatePrompt(info, opts)
+    opts = opts or {}
+    if self._updatePromptOpen then
+        return
+    end
+    local parent = self.ScreenGui or self.MainFrame
+    if not parent then
+        return
+    end
+    self._updatePromptOpen = true
+
+    local localVersion = getSpyToolVersion()
+    local remoteVersion = info.remoteVersion or "unknown"
+    local shaShort = (type(info.sha) == "string" and info.sha:sub(1, 7)) or "—"
+    local pending = tonumber(info.pending) or 0
+    local identity = self:_updateIdentity(info)
+    local updateLogText = self:_readUpdateLogText()
+    local hasLog = type(updateLogText) == "string" and updateLogText ~= ""
+    local logBoxHeight = hasLog and 132 or 0
+    local cardHeight = hasLog and 278 or 146
+
+    local backdrop = createInstance("Frame", {
+        Name = "UpdatePromptBackdrop",
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundColor3 = Theme.Shadow,
+        BackgroundTransparency = 0.55,
+        ZIndex = 700,
+        Parent = parent,
+    })
+    pcall(function()
+        backdrop.Active = true
+    end)
+
+    local card = createPanel(Theme.Radius.Medium, {
+        Name = "UpdatePrompt",
+        Size = UDim2.new(0, 400, 0, cardHeight),
+        Position = UDim2.new(0.5, 0, 0.5, 0),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        ImageColor3 = Theme.BackgroundSecondary,
+        ZIndex = 701,
+        Parent = backdrop,
+    }, true)
+
+    createInstance("TextLabel", {
+        Size = UDim2.new(1, -24, 0, 22),
+        Position = UDim2.new(0, 12, 0, 14),
+        BackgroundTransparency = 1,
+        Text = "Update available",
+        TextColor3 = Theme.TextPrimary,
+        TextSize = 14,
+        Font = Theme.FontFamilyBold,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 702,
+        Parent = card,
+    })
+
+    local bodyText = string.format(
+        "Installed %s → available %s\nCommit %s · %d file%s changed.",
+        localVersion,
+        remoteVersion,
+        shaShort,
+        pending,
+        pending == 1 and "" or "s"
+    )
+    createInstance("TextLabel", {
+        Size = UDim2.new(1, -24, 0, 36),
+        Position = UDim2.new(0, 12, 0, 40),
+        BackgroundTransparency = 1,
+        Text = bodyText,
+        TextColor3 = Theme.TextSecondary,
+        TextSize = 11,
+        Font = Theme.FontFamily,
+        TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top,
+        ZIndex = 702,
+        Parent = card,
+    })
+
+    if hasLog then
+        local logBox
+        do
+            local okCanvas, canvas = pcall(function()
+                return createInstance("CanvasGroup", {
+                    Name = "UpdateLogBox",
+                    Size = UDim2.new(1, -24, 0, logBoxHeight),
+                    Position = UDim2.new(0, 12, 0, 84),
+                    BackgroundColor3 = Theme.Background,
+                    BorderSizePixel = 0,
+                    ZIndex = 702,
+                    Parent = card,
+                })
+            end)
+            if okCanvas and canvas then
+                logBox = canvas
+            else
+                logBox = createInstance("Frame", {
+                    Name = "UpdateLogBox",
+                    Size = UDim2.new(1, -24, 0, logBoxHeight),
+                    Position = UDim2.new(0, 12, 0, 84),
+                    BackgroundColor3 = Theme.Background,
+                    BorderSizePixel = 0,
+                    ClipsDescendants = true,
+                    ZIndex = 702,
+                    Parent = card,
+                })
+            end
+        end
+        createCorner(logBox, Theme.CornerRadiusSmall or 8)
+        createStroke(logBox, Theme.Border, 1)
+
+        local scroll = createInstance("ScrollingFrame", {
+            Name = "UpdateLogScroll",
+            Size = UDim2.new(1, 0, 1, 0),
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            ScrollBarThickness = 5,
+            ScrollBarImageColor3 = Theme.TextMuted,
+            ScrollingDirection = Enum.ScrollingDirection.Y,
+            CanvasSize = UDim2.new(0, 0, 0, 0),
+            AutomaticCanvasSize = Enum.AutomaticSize.None,
+            ZIndex = 703,
+            Parent = logBox,
+        })
+
+        local pad = 10
+        local logLabel = createInstance("TextLabel", {
+            Name = "UpdateLogText",
+            Position = UDim2.new(0, pad, 0, pad),
+            Size = UDim2.new(1, -(pad * 2 + 6), 0, 0),
+            BackgroundTransparency = 1,
+            Text = updateLogText,
+            TextColor3 = Theme.TextMuted,
+            TextSize = 11,
+            Font = Theme.FontFamily,
+            TextWrapped = true,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextYAlignment = Enum.TextYAlignment.Top,
+            ZIndex = 704,
+            Parent = scroll,
+        })
+
+        local function refreshLogCanvas()
+            if not scroll.Parent or not logLabel.Parent then
+                return
+            end
+            local width = math.max(1, scroll.AbsoluteSize.X - (pad * 2 + 6))
+            local height = 1
+            if TextService then
+                local okBounds, bounds = pcall(function()
+                    return TextService:GetTextSize(
+                        updateLogText,
+                        11,
+                        Theme.FontFamily,
+                        Vector2.new(width, 100000)
+                    )
+                end)
+                if okBounds and bounds then
+                    height = math.max(1, bounds.Y)
+                end
+            end
+            if height <= 1 then
+                local lineCount = 1
+                for _ in string.gmatch(updateLogText, "\n") do
+                    lineCount = lineCount + 1
+                end
+                height = math.max(1, lineCount * 14)
+            end
+            logLabel.Size = UDim2.new(1, -(pad * 2 + 6), 0, height)
+            scroll.CanvasSize = UDim2.new(0, 0, 0, height + pad * 2)
+        end
+
+        task.defer(refreshLogCanvas)
+        self:_trackConnection(scroll:GetPropertyChangedSignal("AbsoluteSize"):Connect(refreshLogCanvas))
+    end
+
+    local buttonRow = createInstance("Frame", {
+        Size = UDim2.new(1, -24, 0, 32),
+        Position = UDim2.new(0, 12, 1, -44),
+        BackgroundTransparency = 1,
+        ZIndex = 702,
+        Parent = card,
+    })
+
+    local closed = false
+    local function closePrompt()
+        if closed then
+            return
+        end
+        closed = true
+        self._updatePromptOpen = false
+        pcall(function()
+            backdrop:Destroy()
+        end)
+    end
+
+    local skipLabel = "Skip this version"
+    local skipLink = createInstance("TextButton", {
+        Name = "SkipVersionLink",
+        Size = UDim2.new(0, measureTextWidth(skipLabel, 11, Theme.FontFamily) + 4, 1, 0),
+        Position = UDim2.new(0, 0, 0, 0),
+        BackgroundTransparency = 1,
+        Text = skipLabel,
+        TextColor3 = Theme.TextMuted,
+        TextSize = 11,
+        Font = Theme.FontFamily,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        AutoButtonColor = false,
+        ZIndex = 703,
+        Parent = buttonRow,
+    })
+    local skipUnderline = createInstance("Frame", {
+        Name = "Underline",
+        Size = UDim2.new(1, 0, 0, 1),
+        Position = UDim2.new(0, 0, 1, -6),
+        BackgroundColor3 = Theme.TextMuted,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ZIndex = 704,
+        Parent = skipLink,
+    })
+    skipLink.MouseEnter:Connect(function()
+        tween(skipLink, {TextColor3 = Theme.TextSecondary}, 0.12)
+        tween(skipUnderline, {BackgroundTransparency = 0}, 0.12)
+    end)
+    skipLink.MouseLeave:Connect(function()
+        tween(skipLink, {TextColor3 = Theme.TextMuted}, 0.12)
+        tween(skipUnderline, {BackgroundTransparency = 1}, 0.12)
+    end)
+    skipLink.MouseButton1Click:Connect(function()
+        self:_markUpdateSkipped(identity, info)
+        if self._updateStatusLabel then
+            self._updateStatusLabel.Text = "Skipped update " .. tostring(remoteVersion) .. " (" .. shaShort .. ")."
+        end
+        UIComponents.Notification(self.ScreenGui, "Update skipped", "warning")
+        closePrompt()
+    end)
+
+    local actions = createInstance("Frame", {
+        Name = "Actions",
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+        ZIndex = 703,
+        Parent = buttonRow,
+    })
+    createListLayout(actions, 8, Enum.FillDirection.Horizontal, Enum.HorizontalAlignment.Right, Enum.VerticalAlignment.Center)
+
+    UIComponents.Button(actions, "Ignore", nil, function()
+        self:_markUpdateIgnored(identity, info)
+        if self._updateStatusLabel then
+            self._updateStatusLabel.Text = "Update ignored for this session (" .. tostring(remoteVersion) .. ")."
+        end
+        UIComponents.Notification(self.ScreenGui, "Ignored until rejoin", "warning")
+        closePrompt()
+    end)
+
+    UIComponents.Button(actions, "Confirm", "primary", function()
+        self:_appendUpdateLog(string.format(
+            "confirm | id=%s | version=%s | sha=%s | source=%s",
+            identity,
+            tostring(remoteVersion),
+            tostring(info.sha or ""),
+            opts.manual and "manual" or "auto"
+        ))
+        closePrompt()
+        self:StartUpdateToLatest()
+    end)
+end
+
+function RemoteSpyUI:CheckForUpdates(opts)
+    opts = opts or {}
+    local manual = opts.manual == true
+    if self._checkingForUpdates or self._updatingToLatest or self._updatePromptOpen then
+        return
+    end
+    if self._destroying then
+        return
+    end
+
+    local boot = self:_getBootstrapApi()
+    local checkFn = boot and boot.CheckForUpdates
+    if type(checkFn) ~= "function" then
+        if manual then
+            UIComponents.Notification(self.ScreenGui, "Bootstrap update check unavailable", "error")
+        end
+        return
+    end
+
+    self._checkingForUpdates = true
+    if self._updateStatusLabel then
+        self._updateStatusLabel.Text = manual and "Checking for updates…" or "Auto-checking for updates…"
+    end
+
+    task.spawn(function()
+        local ok, infoOrErr = pcall(checkFn)
+        self._checkingForUpdates = false
+        if self._destroying then
+            return
+        end
+        if not ok then
+            self:_appendUpdateLog(string.format(
+                "check | source=%s | error=%s",
+                manual and "manual" or "auto",
+                tostring(infoOrErr)
+            ))
+            if manual then
+                if self._updateStatusLabel then
+                    self._updateStatusLabel.Text = "Update check failed."
+                end
+                UIComponents.Notification(self.ScreenGui, "Update check failed", "error")
+            end
+            return
+        end
+
+        local info = type(infoOrErr) == "table" and infoOrErr or {}
+        info.localVersion = getSpyToolVersion()
+        local identity = self:_updateIdentity(info)
+        local available = info.available == true
+        self:_appendUpdateLog(string.format(
+            "check | source=%s | available=%s | id=%s | version=%s | sha=%s | pending=%s",
+            manual and "manual" or "auto",
+            tostring(available),
+            identity,
+            tostring(info.remoteVersion or ""),
+            tostring(info.sha or ""),
+            tostring(info.pending or 0)
+        ))
+
+        if not available then
+            if self._updateStatusLabel then
+                self._updateStatusLabel.Text = "Already up to date (" .. getSpyToolVersion() .. ")."
+            end
+            if manual then
+                UIComponents.Notification(self.ScreenGui, "Already up to date", "success")
+            end
+            return
+        end
+
+        if not manual and self:_isUpdateSkipped(identity) then
+            if self._updateStatusLabel then
+                self._updateStatusLabel.Text = string.format(
+                    "Update %s available (skipped). Use Check for updates to review.",
+                    tostring(info.remoteVersion or identity)
+                )
+            end
+            return
+        end
+
+        if not manual and self:_isUpdateIgnored(identity) then
+            if self._updateStatusLabel then
+                self._updateStatusLabel.Text = string.format(
+                    "Update %s available (ignored this session).",
+                    tostring(info.remoteVersion or identity)
+                )
+            end
+            return
+        end
+
+        if self._updateStatusLabel then
+            self._updateStatusLabel.Text = string.format(
+                "Update available: %s → %s (%d files).",
+                getSpyToolVersion(),
+                tostring(info.remoteVersion or "newer"),
+                tonumber(info.pending) or 0
+            )
+        end
+        self:_showUpdatePrompt(info, { manual = manual })
+    end)
+end
+
+function RemoteSpyUI:StartAutoUpdateChecker()
+    self._autoUpdateCheckGen = (self._autoUpdateCheckGen or 0) + 1
+    local gen = self._autoUpdateCheckGen
+    task.spawn(function()
+        task.wait(8)
+        while not self._destroying and self._autoUpdateCheckGen == gen do
+            if not self._updatingToLatest and not self._checkingForUpdates and not self._updatePromptOpen then
+                self:CheckForUpdates({ manual = false })
+            end
+            local waited = 0
+            while waited < UPDATE_CHECK_INTERVAL do
+                if self._destroying or self._autoUpdateCheckGen ~= gen then
+                    return
+                end
+                task.wait(1)
+                waited = waited + 1
+            end
+        end
+    end)
 end
 
 function RemoteSpyUI:_createUpdaterOverlay()
@@ -5810,8 +6387,7 @@ function RemoteSpyUI:StartUpdateToLatest()
     if self._updatingToLatest then
         return
     end
-    local env = (getgenv and getgenv()) or nil
-    local boot = env and env.__SpyToolBootstrap
+    local boot = self:_getBootstrapApi()
     local updateFn = boot and boot.UpdateToLatest
     if type(updateFn) ~= "function" then
         UIComponents.Notification(self.ScreenGui, "Bootstrap updater unavailable", "error")
@@ -5822,8 +6398,9 @@ function RemoteSpyUI:StartUpdateToLatest()
     if self._updateStatusLabel then
         self._updateStatusLabel.Text = "Updating workspace files…"
     end
+    self:_appendUpdateLog("update | start | version=" .. getSpyToolVersion())
     local overlay = self:_createUpdaterOverlay()
-    overlay:SetStatus("Fetching manifest…")
+    overlay:SetStatus("Resolving latest commit…")
     overlay:SetDetail("")
 
     task.spawn(function()
@@ -5832,7 +6409,8 @@ function RemoteSpyUI:StartUpdateToLatest()
         end)
         self._updatingToLatest = false
         if not ok then
-            warn("[SpyTool] Update to latest failed: " .. tostring(result))
+            warn("[SpyTool] Update failed: " .. tostring(result))
+            self:_appendUpdateLog("update | error | " .. tostring(result))
             if overlay and overlay.Destroy then
                 overlay:Destroy()
             end
@@ -5842,15 +6420,67 @@ function RemoteSpyUI:StartUpdateToLatest()
             UIComponents.Notification(self.ScreenGui, "Update failed", "error")
             return
         end
-        -- reload=true replaces the process; if we return here, sync finished without reload.
         if overlay and overlay.Destroy then
             overlay:Destroy()
         end
         if type(result) == "table" and (result.updated or 0) == 0 then
+            self:_appendUpdateLog(string.format(
+                "update | up_to_date | version=%s | sha=%s",
+                getSpyToolVersion(),
+                tostring(result.sha or "")
+            ))
             if self._updateStatusLabel then
                 self._updateStatusLabel.Text = "Already up to date (" .. getSpyToolVersion() .. ")."
             end
             UIComponents.Notification(self.ScreenGui, "Already up to date", "success")
+        elseif type(result) == "table" then
+            self:_appendUpdateLog(string.format(
+                "update | applied | updated=%s | sha=%s",
+                tostring(result.updated or 0),
+                tostring(result.sha or "")
+            ))
+        end
+    end)
+end
+
+function RemoteSpyUI:FetchPublicRelease()
+    if self._updatingToLatest or self._fetchingPublicRelease then
+        return
+    end
+    local boot = self:_getBootstrapApi()
+    local fetchFn = boot and boot.FetchPublicVersion
+    if type(fetchFn) ~= "function" then
+        UIComponents.Notification(self.ScreenGui, "Bootstrap public fetch unavailable", "error")
+        return
+    end
+
+    self._fetchingPublicRelease = true
+    if self._updateStatusLabel then
+        self._updateStatusLabel.Text = "Switching to public release…"
+    end
+    self:_appendUpdateLog("fetch_public | start | version=" .. getSpyToolVersion())
+    local overlay = self:_createUpdaterOverlay()
+    if overlay.Title then
+        overlay.Title.Text = "Switching to public release"
+    end
+    overlay:SetStatus("Clearing local/dev markers…")
+    overlay:SetDetail("")
+
+    task.spawn(function()
+        local ok, err = pcall(function()
+            return fetchFn()
+        end)
+        self._fetchingPublicRelease = false
+        if overlay and overlay.Destroy then
+            overlay:Destroy()
+        end
+        if not ok then
+            warn("[SpyTool] Switch to public release failed: " .. tostring(err))
+            self:_appendUpdateLog("fetch_public | error | " .. tostring(err))
+            if self._updateStatusLabel then
+                self._updateStatusLabel.Text = "Switch to public release failed."
+            end
+            UIComponents.Notification(self.ScreenGui, "Switch to public release failed", "error")
         end
     end)
 end
@@ -9540,14 +10170,12 @@ function RemoteSpyUI:_getCollapsedWindowWidth()
     if self.WindowControls then
         controlsW = math.max(self.WindowControls.AbsoluteSize.X, self.WindowControls.Size.X.Offset)
     end
-    -- Brand + gap + window controls; status is hidden while collapsed.
     return math.max(280, brandPadX + brandW + 12 + controlsW + controlsPad)
 end
 
 function RemoteSpyUI:_syncCollapsedChrome()
     local collapsed = self.IsMinimized == true
     if self.StatusLabel then
-        -- Centered status overlaps the brand in the short collapsed bar.
         self.StatusLabel.Visible = not collapsed
     end
     if collapsed then
@@ -9874,6 +10502,10 @@ function RemoteSpyUI:Destroy(options)
     end
 
     self._destroying = true
+    self._autoUpdateCheckGen = (self._autoUpdateCheckGen or 0) + 1
+    self._checkingForUpdates = false
+    self._fetchingPublicRelease = false
+    self._updatePromptOpen = false
     self._httpPendingPollGen = (self._httpPendingPollGen or 0) + 1
     HttpInterceptor._shuttingDown = true
 

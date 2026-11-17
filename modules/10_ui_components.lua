@@ -432,7 +432,6 @@ function UIComponents.Toggle(parent, initialState, callback, label)
             dragging = false
             return
         end
-        -- Position is center (AnchorPoint 0.5, 0.5) — do not apply top-left Y offsets.
         local minCenter = knobPad + knobSize * 0.5
         local maxCenter = trackW - knobPad - knobSize * 0.5
         local centerX = input.Position.X - toggleBg.AbsolutePosition.X

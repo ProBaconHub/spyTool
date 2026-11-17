@@ -138,8 +138,6 @@ local SquircleShapeDefs = {
         Rect = Rect.new(512, 0, 512, 0),
         Radius = 310,
     },
-    -- Match TitleBarFill (Window-TL-TR): same slice margins so MainFrame corners
-    -- render with the same painted radius as the title cap.
     Window = {
         File = "squircle/window.png",
         Rect = Rect.new(512, 512, 512, 512),
@@ -206,7 +204,6 @@ local function measureTextWidth(text, textSize, font)
             if ok and typeof(bounds) == "Vector2" and bounds.X > 0 and bounds.X < 4000 then
                 return math.ceil(bounds.X)
             end
-            -- Custom FontFace measure failed/unreliable — fall through to enum estimate.
             font = Theme.FontFamilyBold
         end
         local ok, bounds = pcall(function()
@@ -231,7 +228,6 @@ local function applyFontFace(label, fontFace, fallbackEnum)
             return true
         end
     end
-    -- Broken custom FontFace overrides Enum.Font visuals — reset via fromEnum when possible.
     if fallbackEnum then
         local okFace = pcall(function()
             if Font and type(Font.fromEnum) == "function" then
@@ -740,7 +736,7 @@ end
 local DEX_NEWDARK = {
     IconSize = 32,
     Columns = 18,
-    Dir = "instance",
+    Sheet = "instances.png",
 }
 
 local DEX_NEWDARK_INDEX = {
@@ -1059,19 +1055,79 @@ local DEX_NEWDARK_INDEX = {
     WrapTarget = 306,
 }
 
-local function classIconFile(className)
-    local name = className
-    if type(name) ~= "string" or name == "" or not DEX_NEWDARK_INDEX[name] then
-        name = "Placeholder"
+local _classIconSheetUrl = nil
+local function getClassIconSheetUrl()
+    if _classIconSheetUrl ~= nil then
+        return _classIconSheetUrl ~= false and _classIconSheetUrl or nil
     end
-    return DEX_NEWDARK.Dir .. "/" .. name .. ".png"
+    local url = getAssetImage(DEX_NEWDARK.Sheet)
+    _classIconSheetUrl = url or false
+    return url
+end
+
+local function classIconRect(className)
+    local index = DEX_NEWDARK_INDEX[className]
+    if type(index) ~= "number" then
+        index = DEX_NEWDARK_INDEX.Placeholder or DEX_NEWDARK_INDEX.Class or 1
+    end
+    local size = DEX_NEWDARK.IconSize
+    local columns = DEX_NEWDARK.Columns
+    local zeroBased = math.max(0, index - 1)
+    local col = zeroBased % columns
+    local row = math.floor(zeroBased / columns)
+    return Vector2.new(col * size, row * size), Vector2.new(size, size)
+end
+
+local function valueTypeClassName(displayType, value)
+    local t = displayType
+    if type(t) ~= "string" or t == "" then
+        t = typeof(value)
+    end
+    if t == "string" then
+        return "StringValue"
+    elseif t == "boolean" then
+        return "BoolValue"
+    elseif t == "number" then
+        if type(value) == "number" and value == value and value == math.floor(value)
+            and value >= -2147483648 and value <= 2147483647 then
+            return "IntValue"
+        end
+        return "NumberValue"
+    elseif t == "Vector3" then
+        return "Vector3Value"
+    elseif t == "CFrame" then
+        return "CFrameValue"
+    elseif t == "Color3" then
+        return "Color3Value"
+    elseif t == "BrickColor" then
+        return "BrickColorValue"
+    elseif t == "Ray" then
+        return "RayValue"
+    elseif t == "Instance" then
+        if typeof(value) == "Instance" then
+            return value.ClassName
+        end
+        return "ObjectValue"
+    elseif t == "EnumItem" or t == "Enums" or t == "Enum" then
+        return "Value"
+    end
+    if DEX_NEWDARK_INDEX[t] then
+        return t
+    end
+    return "Value"
 end
 
 local function createClassIcon(parent, className, sizePx, props)
     props = props or {}
     sizePx = sizePx or 14
-    local fileName = classIconFile(className)
-    local url = getAssetImage(fileName) or getAssetImage(classIconFile("Placeholder"))
+    local name = className
+    if type(name) ~= "string" or name == "" or not DEX_NEWDARK_INDEX[name] then
+        name = (DEX_NEWDARK_INDEX.Placeholder and "Placeholder")
+            or (DEX_NEWDARK_INDEX.Class and "Class")
+            or "Folder"
+    end
+    local offset, rectSize = classIconRect(name)
+    local url = getClassIconSheetUrl()
     local icon = createInstance("ImageLabel", {
         Name = props.Name or "ClassIcon",
         Size = UDim2.new(0, sizePx, 0, sizePx),
@@ -1079,7 +1135,9 @@ local function createClassIcon(parent, className, sizePx, props)
         AnchorPoint = props.AnchorPoint or Vector2.new(0, 0.5),
         BackgroundTransparency = 1,
         Image = url or "",
-        ScaleType = Enum.ScaleType.Fit,
+        ImageRectOffset = offset,
+        ImageRectSize = rectSize,
+        ScaleType = Enum.ScaleType.Stretch,
         ZIndex = props.ZIndex or 2,
         Parent = parent,
     })

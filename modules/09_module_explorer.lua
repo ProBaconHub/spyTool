@@ -961,7 +961,6 @@ function ModuleExplorer:GenerateCallingCode(moduleData, contentData)
             placeholders[i] = "nil"
         end
         if funcInfo.IsVariadic then
-            -- keep call runnable; user can append more args
         end
         local call = "module" .. keyAccess .. "(" .. table.concat(placeholders, ", ") .. ")"
         table.insert(lines, "local results = table.pack(" .. call .. ")")

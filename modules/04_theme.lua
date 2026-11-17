@@ -30,13 +30,8 @@ local Theme = {
     CyanMuted = Color3.fromRGB(21, 94, 117),
     Orange = Color3.fromRGB(249, 115, 22),
     OrangeMuted = Color3.fromRGB(124, 45, 18),
-    
     Shadow = Color3.fromRGB(0, 0, 0),
-    
-    
-    -- Title bar is short; Window slice margin is 512px in-asset with shapeRadius 310.
-    -- Keep Window radius so 512 * (Window / 310) <= TitleBarHeight, otherwise the
-    -- title cap squashes and MainFrame (tall enough) draws a larger corner.
+
     TitleBarHeight = 36,
     Radius = {
         Window = 21, -- floor(TitleBarHeight * 310 / 512); matches title-cap corner size
